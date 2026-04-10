@@ -1,0 +1,188 @@
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0d1117;
+  color: #e6edf3;
+  margin: 0;
+  padding: 24px;
+}
+
+#app { max-width: 1200px; margin: 0 auto; }
+
+h1 { font-weight: 500; font-size: 22px; margin: 0 0 8px; }
+h2 { font-weight: 500; font-size: 18px; margin: 28px 0 4px; }
+
+.chart-sub { font-size: 12px; color: #8b949e; margin: 0 0 12px; }
+.section-label { font-size: 11px; color: #8b949e; letter-spacing: .5px; text-transform: uppercase; margin: 20px 0 10px; }
+
+/* ── Status bar ────────────────────────────────────────────────────────────── */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: #8b949e;
+  margin-bottom: 20px;
+}
+
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #3fb950;
+  flex-shrink: 0;
+  animation: pulse 2s infinite;
+}
+.dot.err { background: #f85149; animation: none; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: .35; }
+}
+
+/* ── Oracle grid ───────────────────────────────────────────────────────────── */
+.oracle-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+@media (max-width: 900px) { .oracle-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 480px) { .oracle-grid { grid-template-columns: 1fr; } }
+
+.oracle-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  padding: 16px;
+  position: relative;
+  overflow: hidden;
+}
+
+.oracle-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+}
+.pyth-card::before { background: linear-gradient(90deg, #f7931a, #e6b450); }
+.eth-card::before  { background: linear-gradient(90deg, #627eea, #a8b8ff); }
+.sol-card::before  { background: linear-gradient(90deg, #9945ff, #36d399); }
+.mon-card::before  { background: linear-gradient(90deg, #836ef9, #c084fc); }
+
+.oracle-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.oracle-coin { font-size: 18px; line-height: 1; }
+.oracle-logo { font-size: 16px; }
+.oracle-name { font-size: 13px; font-weight: 600; color: #e6edf3; }
+.oracle-tag  {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid #30363d;
+  color: #8b949e;
+}
+
+.oracle-price {
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 6px;
+  transition: color .2s;
+}
+
+.oracle-meta {
+  font-size: 11px;
+  color: #8b949e;
+  line-height: 1.5;
+}
+
+/* flash no preço Pyth */
+.oracle-price.flash-up   { animation: flashUp .4s; }
+.oracle-price.flash-down { animation: flashDown .4s; }
+@keyframes flashUp   { 0% { color: #3fb950; } 100% { color: inherit; } }
+@keyframes flashDown { 0% { color: #f85149; } 100% { color: inherit; } }
+
+/* ── Stats grid (market data) ──────────────────────────────────────────────── */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+@media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+
+.card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 14px;
+}
+.card .label { font-size: 11px; color: #8b949e; letter-spacing: .4px; text-transform: uppercase; }
+.card .val   { font-size: 20px; font-weight: 600; margin-top: 6px; }
+.card .conf  { font-size: 10px; color: #8b949e; margin-top: 4px; }
+
+.up   { color: #3fb950; }
+.down { color: #f85149; }
+
+/* ── Controls ──────────────────────────────────────────────────────────────── */
+.controls { margin-bottom: 12px; }
+
+button {
+  background: #21262d;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-right: 6px;
+  font-size: 13px;
+  transition: background .15s;
+}
+button:hover  { background: #30363d; }
+button.active { background: #1f6feb; border-color: #1f6feb; }
+
+/* ── Charts ────────────────────────────────────────────────────────────────── */
+.chart-wrap {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+  height: 420px;
+  position: relative;
+  margin-bottom: 20px;
+}
+
+.chart-err {
+  color: #f85149;
+  padding: 20px;
+  font-size: 13px;
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────────── */
+.footer {
+  text-align: center;
+  padding: 24px 0 16px;
+  font-size: 12px;
+  color: #8b949e;
+}
+
+.footer a {
+  color: #e6edf3;
+  text-decoration: none;
+  font-weight: 600;
+  border-bottom: 1px solid #30363d;
+  transition: color .15s, border-color .15s;
+}
+
+.footer a:hover {
+  color: #58a6ff;
+  border-color: #58a6ff;
+}

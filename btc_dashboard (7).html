@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>BTC Dashboard ao Vivo</title>
+<style>
+  *{box-sizing:border-box;}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:24px;max-width:1200px;margin:0 auto;}
+  h1{font-weight:500;font-size:22px;margin-bottom:4px;}
+  .status-bar{display:flex;align-items:center;gap:10px;font-size:12px;color:#8b949e;margin-bottom:20px;}
+  .dot{width:8px;height:8px;border-radius:50%;background:#3fb950;flex-shrink:0;animation:pulse 2s infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  .dot.err{background:#f85149;animation:none;}
+  .source-badge{background:#161b22;border:1px solid #30363d;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;letter-spacing:.5px;}
+  .source-badge.pyth{color:#e6b450;border-color:#e6b45040;}
+  .source-badge.binance{color:#f0b90b;border-color:#f0b90b40;}
+  .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;}
+  @media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr);}}
+  .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px;position:relative;overflow:hidden;}
+  .card .label{font-size:11px;color:#8b949e;letter-spacing:.4px;text-transform:uppercase;}
+  .card .val{font-size:20px;font-weight:600;margin-top:6px;transition:color .3s;}
+  .card .sub{font-size:11px;color:#8b949e;margin-top:4px;}
+  .card.flash-up::after{content:'';position:absolute;inset:0;background:#3fb95015;animation:flash .4s;}
+  .card.flash-down::after{content:'';position:absolute;inset:0;background:#f8514915;animation:flash .4s;}
+  @keyframes flash{from{opacity:1}to{opacity:0}}
+  .up{color:#3fb950;} .down{color:#f85149;} .neu{color:#e6edf3;}
+  .chart-wrap{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;height:420px;position:relative;margin-bottom:20px;}
+  .chart-title{font-size:14px;font-weight:500;margin-bottom:4px;}
+  .chart-sub{font-size:12px;color:#8b949e;margin-bottom:12px;}
+  button{background:#21262d;color:#e6edf3;border:1px solid #30363d;padding:6px 12px;border-radius:6px;cursor:pointer;margin-right:6px;font-size:13px;transition:background .2s;}
+  button:hover{background:#30363d;}
+  button.active{background:#1f6feb;border-color:#1f6feb;}
+  .controls{margin-bottom:12px;}
+  .conf{font-size:10px;color:#8b949e;}
+</style>
+</head>
+<body>
+
+<h1>₿ BTC Dashboard — ao vivo</h1>
+<div class="status-bar">
+  <div class="dot" id="dot"></div>
+  <span id="status">Conectando...</span>
+  <span class="source-badge pyth">PYTH ORACLE</span>
+  <span class="source-badge binance">BINANCE WS</span>
+</div>
+
+<div class="stats" id="stats">
+  <div class="card"><div class="label">Preço (Pyth)</div><div class="val" id="s-price">—</div><div class="conf" id="s-conf"></div></div>
+  <div class="card"><div class="label">Variação 24h</div><div class="val" id="s-chg">—</div></div>
+  <div class="card"><div class="label">Máx 24h</div><div class="val" id="s-high">—</div></div>
+  <div class="card"><div class="label">Mín 24h</div><div class="val" id="s-low">—</div></div>
+  <div class="card"><div class="label">Volume 24h</div><div class="val" id="s-vol">—</div><div class="sub" id="s-vol-btc"></div></div>
+</div>
+
+<div class="controls">
+  <button onclick="setRange(1)">24h</button>
+  <button onclick="setRange(7)" id="btn7" class="active">7d</button>
+  <button onclick="setRange(30)">30d</button>
+  <button onclick="setRange(90)">90d</button>
+  <button onclick="setRange(365)">1a</button>
+</div>
+<div class="chart-wrap"><canvas id="chart"></canvas></div>
+
+<h1>Ciclos sobrepostos</h1>
+<div class="chart-sub">Comparação alinhada a partir do topo de cada ciclo (dados Binance)</div>
+<div class="chart-wrap" id="cycles-wrap"><canvas id="cycles"></canvas></div>
+
+<h1 style="margin-top:8px;">BTC vs MON (normalizado base 100)</h1>
+<div class="chart-sub">Comparação relativa desde o início da listagem do MON</div>
+<div class="chart-wrap" id="btcmon-wrap"><canvas id="btcmon"></canvas></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+// ─── Pyth Network Hermes (oráculo on-chain agregado) ─────────────────────────
+// Feed ID BTC/USD: https://pyth.network/price-feeds/crypto-btc-usd
+const PYTH_BTC  = '0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43';
+const HERMES    = 'https://hermes.pyth.network';
+
+// ─── Binance REST ─────────────────────────────────────────────────────────────
+const BINANCE   = 'https://api.binance.com/api/v3';
+
+// ─── Estado ───────────────────────────────────────────────────────────────────
+let priceChart = null;
+let days = 7;
+let wsRetryTimer = null;
+let lastPythPrice = null;
+
+// ─── Pyth Hermes: preço spot com intervalo de confiança ──────────────────────
+async function fetchPyth() {
+  const res = await fetch(`${HERMES}/v2/updates/price/latest?ids[]=${PYTH_BTC}&parsed=true`);
+  if (!res.ok) throw new Error('Pyth HTTP ' + res.status);
+  const data = await res.json();
+  const p = data.parsed[0].price;
+  const price = parseFloat(p.price) * Math.pow(10, p.expo);
+  const conf  = parseFloat(p.conf)  * Math.pow(10, p.expo);
+  const age   = Math.round(Date.now() / 1000 - data.parsed[0].price.publish_time);
+  return { price, conf, age };
+}
+
+function updatePriceCard(price, conf, age) {
+  const el = document.getElementById('s-price');
+  const prev = lastPythPrice;
+  el.textContent = '$' + price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  document.getElementById('s-conf').textContent =
+    `±$${conf.toFixed(2)} confiança · publicado há ${age}s`;
+  // flash
+  if (prev !== null) {
+    const card = el.closest('.card');
+    card.classList.remove('flash-up','flash-down');
+    void card.offsetWidth; // reflow
+    card.classList.add(price >= prev ? 'flash-up' : 'flash-down');
+  }
+  lastPythPrice = price;
+}
+
+// ─── Binance WebSocket: ticker 24h em tempo real ─────────────────────────────
+function connectWS() {
+  clearTimeout(wsRetryTimer);
+  const ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@ticker');
+
+  ws.onopen = () => {
+    document.getElementById('dot').classList.remove('err');
+    document.getElementById('status').textContent =
+      'Conectado · WebSocket Binance + Pyth Oracle · ' + new Date().toLocaleTimeString('pt-BR');
+  };
+
+  ws.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    const price  = parseFloat(d.c);
+    const chg    = parseFloat(d.P);
+    const high   = parseFloat(d.h);
+    const low    = parseFloat(d.l);
+    const volUSD = parseFloat(d.q); // quote asset volume = USD
+    const volBTC = parseFloat(d.v);
+
+    const chgCls = chg >= 0 ? 'up' : 'down';
+    const sign   = chg >= 0 ? '+' : '';
+
+    document.getElementById('s-chg').className  = 'val ' + chgCls;
+    document.getElementById('s-chg').textContent = sign + chg.toFixed(2) + '%';
+    document.getElementById('s-high').textContent = '$' + high.toLocaleString('en-US', {maximumFractionDigits:0});
+    document.getElementById('s-low').textContent  = '$' + low.toLocaleString('en-US', {maximumFractionDigits:0});
+    document.getElementById('s-vol').textContent  = '$' + (volUSD / 1e9).toFixed(2) + 'B';
+    document.getElementById('s-vol-btc').textContent = volBTC.toFixed(0) + ' BTC';
+
+    document.getElementById('status').textContent =
+      'Ao vivo · último tick ' + new Date().toLocaleTimeString('pt-BR');
+  };
+
+  ws.onerror = () => {
+    document.getElementById('dot').classList.add('err');
+    document.getElementById('status').textContent = 'WebSocket com erro, reconectando...';
+  };
+
+  ws.onclose = () => {
+    document.getElementById('dot').classList.add('err');
+    wsRetryTimer = setTimeout(connectWS, 4000);
+  };
+}
+
+// ─── Pyth polling (preço de oráculo independente da exchange) ─────────────────
+async function pollPyth() {
+  try {
+    const { price, conf, age } = await fetchPyth();
+    updatePriceCard(price, conf, age);
+  } catch(e) {
+    console.warn('Pyth fallback:', e.message);
+  }
+  setTimeout(pollPyth, 3000);
+}
+
+// ─── Gráfico de preço histórico (Binance klines) ─────────────────────────────
+async function loadPriceChart() {
+  const interval = days <= 1 ? '1h' : days <= 7 ? '4h' : '1d';
+  const limit = days <= 1 ? 24 : days <= 7 ? 42 : Math.min(days, 365);
+  const res = await fetch(`${BINANCE}/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`);
+  if (!res.ok) throw new Error('Binance klines HTTP ' + res.status);
+  const raw = await res.json();
+  const labels = raw.map(k => {
+    const d = new Date(k[0]);
+    return days <= 1
+      ? d.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})
+      : d.toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit'});
+  });
+  const closes = raw.map(k => parseFloat(k[4]));
+  const up = closes[closes.length - 1] >= closes[0];
+  const color = up ? '#3fb950' : '#f85149';
+
+  if (priceChart) priceChart.destroy();
+  priceChart = new Chart(document.getElementById('chart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'BTC/USDT',
+        data: closes,
+        borderColor: color,
+        backgroundColor: color + '18',
+        fill: true,
+        tension: .25,
+        pointRadius: 0,
+        borderWidth: 2
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#8b949e', maxTicksLimit: 8 }, grid: { color: '#21262d' } },
+        y: { ticks: { color: '#8b949e', callback: v => '$' + v.toLocaleString('en-US') }, grid: { color: '#21262d' } }
+      }
+    }
+  });
+}
+
+function setRange(d) {
+  days = d;
+  document.querySelectorAll('.controls button').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  loadPriceChart().catch(console.error);
+}
+
+// ─── Ciclos sobrepostos ───────────────────────────────────────────────────────
+async function loadCycles() {
+  const wrap = document.getElementById('cycles-wrap');
+  try {
+    const fetchRange = async (start, end) => {
+      const r = await fetch(`${BINANCE}/klines?symbol=BTCUSDT&interval=1d&startTime=${start}&endTime=${end}&limit=1000`);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return (await r.json()).map(k => [k[0], parseFloat(k[4])]);
+    };
+    const t1a = new Date('2021-01-01').getTime();
+    const t1b = new Date('2023-06-01').getTime();
+    const t2a = new Date('2024-10-01').getTime();
+    const [w1, w2] = await Promise.all([fetchRange(t1a, t1b), fetchRange(t2a, Date.now())]);
+    if (!w1.length || !w2.length) throw new Error('sem dados');
+
+    const topIdx = arr => arr.reduce((m, p, i, a) => p[1] > a[m][1] ? i : m, 0);
+    const i1 = topIdx(w1), i2 = topIdx(w2);
+    const fromTop = (arr, i) => {
+      const out = [];
+      for (let k = i; k < arr.length; k += 30) out.push(+(arr[k][1] / 1000).toFixed(2));
+      return out;
+    };
+    const c1 = fromTop(w1, i1), c2 = fromTop(w2, i2);
+    const n = Math.max(c1.length, c2.length);
+    const labels = Array.from({length: n}, (_, i) => 'M+' + i);
+
+    new Chart(document.getElementById('cycles'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: `Ciclo 2021/22 (topo $${(w1[i1][1]/1000).toFixed(0)}k)`, data: c1, borderColor: '#f85149', backgroundColor: '#f8514918', fill: true, tension: .3, borderWidth: 2, pointRadius: 0 },
+          { label: `Ciclo 2024/25 (topo $${(w2[i2][1]/1000).toFixed(0)}k)`, data: c2, borderColor: '#3fb950', backgroundColor: '#3fb95018', fill: true, tension: .3, borderWidth: 2, pointRadius: 0 }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: { callbacks: { label: c => c.dataset.label.split(' (')[0] + ': $' + c.parsed.y.toFixed(1) + 'k' } } },
+        scales: {
+          x: { ticks: { color: '#8b949e' }, grid: { color: '#21262d' } },
+          y: { ticks: { color: '#8b949e', callback: v => '$' + v + 'k' }, grid: { color: '#21262d' } }
+        }
+      }
+    });
+  } catch(e) {
+    wrap.innerHTML = '<div style="color:#f85149;padding:20px;">Erro ciclos: ' + e.message + '</div>';
+    console.error('cycles:', e);
+  }
+}
+
+// ─── BTC vs MON ───────────────────────────────────────────────────────────────
+async function loadBtcMon() {
+  const wrap = document.getElementById('btcmon-wrap');
+  try {
+    const fetchK = async sym => {
+      const r = await fetch(`${BINANCE}/klines?symbol=${sym}&interval=1d&limit=1000`);
+      if (!r.ok) throw new Error(sym + ' HTTP ' + r.status);
+      return (await r.json()).map(k => [k[0], parseFloat(k[4])]);
+    };
+    const mon = await fetchK('MONUSDT');
+    if (!mon.length) throw new Error('MON sem dados na Binance');
+    const startTs = mon[0][0];
+    const btcAll = await fetchK('BTCUSDT');
+    const btc = btcAll.filter(p => p[0] >= startTs);
+    const norm = arr => { const base = arr[0][1]; return arr.map(p => [p[0], +(p[1] / base * 100).toFixed(4)]); };
+    const btcN = norm(btc), monN = norm(mon);
+    const labels = monN.map(p => new Date(p[0]).toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit'}));
+    new Chart(document.getElementById('btcmon'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: 'BTC', data: btcN.map(p => p[1]), borderColor: '#f7931a', fill: false, tension: .25, pointRadius: 0, borderWidth: 2 },
+          { label: 'MON', data: monN.map(p => p[1]), borderColor: '#836ef9', fill: false, tension: .25, pointRadius: 0, borderWidth: 2 }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#e6edf3' } } },
+        scales: {
+          x: { ticks: { color: '#8b949e', maxTicksLimit: 10 }, grid: { color: '#21262d' } },
+          y: { ticks: { color: '#8b949e', callback: v => v.toFixed(0) }, grid: { color: '#21262d' } }
+        }
+      }
+    });
+  } catch(e) {
+    wrap.innerHTML = '<div style="color:#f85149;padding:20px;">Erro BTC vs MON: ' + e.message + '</div>';
+    console.error('btcmon:', e);
+  }
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+connectWS();
+pollPyth();
+loadPriceChart().catch(console.error);
+setTimeout(loadCycles, 1500);
+setTimeout(loadBtcMon, 3000);
+
+// Refresh do gráfico de preço a cada 60s (klines)
+setInterval(() => loadPriceChart().catch(console.error), 60000);
+</script>
+</body>
+</html>
