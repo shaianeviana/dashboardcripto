@@ -23,3 +23,12 @@ export interface Kline {
   time: number;
   close: number;
 }
+
+export interface Candle {
+  time: number;    // ms
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}

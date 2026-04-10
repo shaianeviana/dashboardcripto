@@ -5,14 +5,16 @@ import {
   PointElement,
   LinearScale,
   CategoryScale,
+  TimeScale,
   Filler,
   Legend,
   Tooltip,
 } from 'chart.js'
+import zoomPlugin from 'chartjs-plugin-zoom'
 import type { Kline } from './types'
 import { fetchKlines } from './binance'
 
-Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Legend, Tooltip)
+Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, TimeScale, Filler, Legend, Tooltip, zoomPlugin)
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -31,12 +33,114 @@ function dateFmt(ts: number, showTime: boolean): string {
     : new Date(ts).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
 }
 
-/** Atualiza o último ponto de um dataset e faz update sem animação */
-function tickLast(chart: Chart, datasetIdx: number, value: number): void {
+/** Atualiza o último ponto de um dataset sem animação (não chama update — chamar depois) */
+function setLast(chart: Chart, datasetIdx: number, value: number): void {
   const data = chart.data.datasets[datasetIdx].data as number[]
-  if (!data.length) return
-  data[data.length - 1] = value
-  chart.update('none')
+  if (data.length) data[data.length - 1] = value
+}
+
+// ─── Plugin: linha de preço atual + label flutuante (price chart) ─────────────
+
+const lastPricePlugin = {
+  id: 'lastPrice',
+  afterDraw(chart: Chart) {
+    const ds   = chart.data.datasets[0]
+    const data = ds.data as number[]
+    if (!data.length) return
+
+    const lastVal = data[data.length - 1]
+    const yScale  = chart.scales['y']
+    const xScale  = chart.scales['x']
+    if (!yScale || !xScale) return
+
+    const y     = yScale.getPixelForValue(lastVal)
+    const left  = xScale.left
+    const right = xScale.right
+    const color = (ds.borderColor as string) ?? '#58a6ff'
+    const ctx   = chart.ctx
+
+    ctx.save()
+
+    // linha tracejada horizontal
+    ctx.setLineDash([5, 5])
+    ctx.strokeStyle = color + 'aa'
+    ctx.lineWidth   = 1
+    ctx.beginPath()
+    ctx.moveTo(left, y)
+    ctx.lineTo(right - 72, y)
+    ctx.stroke()
+
+    // ponto pulsante no final da linha
+    ctx.setLineDash([])
+    ctx.fillStyle = color
+    ctx.beginPath()
+    ctx.arc(right - 80, y, 4, 0, Math.PI * 2)
+    ctx.fill()
+
+    // label de preço
+    const label   = '$' + lastVal.toLocaleString('en-US', { maximumFractionDigits: 0 })
+    const padX    = 6
+    const padY    = 5
+    const fontSize = 11
+    ctx.font      = `600 ${fontSize}px -apple-system, sans-serif`
+    const tw      = ctx.measureText(label).width
+    const bw      = tw + padX * 2
+    const bh      = fontSize + padY * 2
+    const bx      = right - bw
+    const by      = y - bh / 2
+
+    ctx.fillStyle   = color
+    ctx.beginPath()
+    ctx.roundRect(bx, by, bw, bh, 3)
+    ctx.fill()
+
+    ctx.fillStyle  = '#0d1117'
+    ctx.textAlign  = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(label, bx + padX, y)
+
+    ctx.restore()
+  },
+}
+
+// ─── Plugin: ponto vivo no último valor (todos os gráficos) ──────────────────
+
+const liveDotsPlugin = {
+  id: 'liveDots',
+  afterDraw(chart: Chart) {
+    const ctx = chart.ctx
+    const yScale = chart.scales['y']
+    const xScale = chart.scales['x']
+    if (!yScale || !xScale) return
+
+    const colors: Record<number, string> = {
+      0: '#f7931a', 1: '#627eea', 2: '#36d399', 3: '#9945ff',
+    }
+
+    chart.data.datasets.forEach((ds, i) => {
+      const data = ds.data as number[]
+      if (!data.length) return
+      const lastVal = data[data.length - 1]
+      if (!isFinite(lastVal)) return
+
+      const x     = xScale.getPixelForValue(data.length - 1)
+      const y     = yScale.getPixelForValue(lastVal)
+      const color = (ds.borderColor as string) ?? colors[i] ?? '#58a6ff'
+
+      ctx.save()
+      // halo
+      ctx.fillStyle = color + '33'
+      ctx.beginPath()
+      ctx.arc(x, y, 7, 0, Math.PI * 2)
+      ctx.fill()
+      // ponto central
+      ctx.fillStyle = color
+      ctx.beginPath()
+      ctx.arc(x, y, 3.5, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.restore()
+    })
+  },
 }
 
 // ─── Gráfico de preço ─────────────────────────────────────────────────────────
@@ -82,18 +186,19 @@ export async function renderPriceChart(canvas: HTMLCanvasElement, days: number):
         y: { ...YAXIS, ticks: { ...YAXIS.ticks, callback: v => '$' + Number(v).toLocaleString('en-US') } },
       },
     },
+    plugins: [lastPricePlugin],
   })
 }
 
 /** Atualiza o último candle do gráfico de preço com o preço ao vivo */
 export function tickPriceChart(btcPrice: number): void {
   if (!priceChart) return
-  tickLast(priceChart, 0, btcPrice)
-  // ajusta a cor da linha conforme sobe/desce em relação ao início do período
   const up    = btcPrice >= priceFirstVal
   const color = up ? '#3fb950' : '#f85149'
+  setLast(priceChart, 0, btcPrice)
   priceChart.data.datasets[0].borderColor     = color
   priceChart.data.datasets[0].backgroundColor = color + '18'
+  priceChart.update('none')
 }
 
 // ─── Ciclos sobrepostos ───────────────────────────────────────────────────────
@@ -148,13 +253,15 @@ export async function renderCyclesChart(canvas: HTMLCanvasElement): Promise<void
         y: { ...YAXIS, ticks: { ...YAXIS.ticks, callback: v => '$' + v + 'k' } },
       },
     },
+    plugins: [liveDotsPlugin],
   })
 }
 
 /** Atualiza o último ponto do ciclo atual com o preço ao vivo (em k$) */
 export function tickCyclesChart(btcPrice: number): void {
   if (!cyclesChart) return
-  tickLast(cyclesChart, 1, parseFloat((btcPrice / 1000).toFixed(2)))
+  setLast(cyclesChart, 1, parseFloat((btcPrice / 1000).toFixed(2)))
+  cyclesChart.update('none')
 }
 
 // ─── BTC vs MON ───────────────────────────────────────────────────────────────
@@ -264,8 +371,10 @@ async function fetchAligned(symbol: string, monKlines: Kline[]): Promise<{ data:
   return { data, basePrice }
 }
 
-// base prices para normalização ao vivo
-const compBase: Record<string, number> = {}
+// base prices e raw data para tooltip com preço real
+const compBase:    Record<string, number>   = {}
+const compRaw:     Record<string, number[]> = {}   // preços reais por índice
+const compSymbols  = ['BTC', 'ETH', 'SOL', 'MON'] as const
 let compChart: Chart | null = null
 
 export async function renderBtcMonChart(canvas: HTMLCanvasElement): Promise<void> {
@@ -281,8 +390,20 @@ export async function renderBtcMonChart(canvas: HTMLCanvasElement): Promise<void
   compBase.BTC = btcR.basePrice
   compBase.ETH = ethR.basePrice
   compBase.SOL = solR.basePrice
+  // raw prices para tooltip (normalizado * base / 100 = preço real)
+  compRaw.BTC = btcR.data.map(v => isNaN(v) ? NaN : (v / 100) * btcR.basePrice)
+  compRaw.ETH = ethR.data.map(v => isNaN(v) ? NaN : (v / 100) * ethR.basePrice)
+  compRaw.SOL = solR.data.map(v => isNaN(v) ? NaN : (v / 100) * solR.basePrice)
+  compRaw.MON = monKlines.map(k => k.close)
 
   const labels = monKlines.map(k => dateFmt(k.time, false))
+
+  // decimais por ativo
+  const fmtPrice = (sym: string, price: number) => {
+    if (!isFinite(price)) return '—'
+    const dec = sym === 'SOL' || sym === 'MON' ? 3 : 2
+    return '$' + price.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec })
+  }
 
   compChart = destroy(compChart)
   compChart = new Chart(canvas, {
@@ -300,22 +421,58 @@ export async function renderBtcMonChart(canvas: HTMLCanvasElement): Promise<void
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
+      interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { labels: { color: '#e6edf3' } },
-        tooltip: { callbacks: { label: c => `${c.dataset.label?.split(' ·')[0]}: ${(c.parsed.y ?? 0).toFixed(1)}` } },
+        tooltip: {
+          backgroundColor: '#1c2128',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          padding: 10,
+          callbacks: {
+            title: (items) => items[0]?.label ?? '',
+            label: (c) => {
+              const sym   = compSymbols[c.datasetIndex] ?? 'BTC'
+              const name  = c.dataset.label?.split(' ·')[0] ?? sym
+              const idx   = c.dataIndex
+              const raw   = compRaw[sym]?.[idx]
+              const norm  = c.parsed.y ?? 0
+              const diff  = norm - 100
+              const sign  = diff >= 0 ? '+' : ''
+              const price = fmtPrice(sym, raw ?? NaN)
+              return `  ${name}: ${price}   ${sign}${diff.toFixed(2)}% desde início do MON`
+            },
+          },
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: {
+          pan:  { enabled: true,  mode: 'x', threshold: 5 },
+          zoom: {
+            wheel:  { enabled: true },
+            pinch:  { enabled: true },
+            mode:   'x',
+          },
+          limits: { x: { minRange: 5 } },
+        },
       },
       scales: {
         x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
         y: { ...YAXIS, ticks: { ...YAXIS.ticks, callback: v => Number(v).toFixed(0) } },
       },
     },
+    plugins: [liveDotsPlugin],
   })
 }
 
-/**
- * Atualiza os últimos pontos de BTC/ETH/SOL no gráfico de comparação com preços ao vivo.
- * Os índices dos datasets: 0=BTC, 1=ETH, 2=SOL, 3=MON (MON não tem feed ao vivo, fica estático)
- */
+/** Reseta o zoom do gráfico de comparação */
+export function resetComparisonZoom(): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(compChart as any)?.resetZoom()
+}
+
+/** Atualiza os últimos pontos de BTC/ETH/SOL com preços ao vivo */
 export function tickComparisonChart(prices: Partial<Record<'BTC' | 'ETH' | 'SOL', number>>): void {
   if (!compChart) return
   let updated = false
@@ -323,7 +480,7 @@ export function tickComparisonChart(prices: Partial<Record<'BTC' | 'ETH' | 'SOL'
     const live = prices[sym]
     const base = compBase[sym]
     if (live && base) {
-      tickLast(compChart, idx, parseFloat((live / base * 100).toFixed(4)))
+      setLast(compChart, idx, parseFloat((live / base * 100).toFixed(4)))
       updated = true
     }
   }

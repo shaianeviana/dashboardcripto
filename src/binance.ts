@@ -1,4 +1,4 @@
-import type { Kline, TickerStats } from './types'
+import type { Candle, Kline, TickerStats } from './types'
 
 const REST = 'https://api.binance.com/api/v3'
 const WS   = 'wss://stream.binance.com:9443/ws'
@@ -21,6 +21,25 @@ export async function fetchKlines(
 
   const raw: [number, string, string, string, string, ...unknown[]][] = await res.json()
   return raw.map(k => ({ time: k[0], close: parseFloat(k[4]) }))
+}
+
+export async function fetchCandles(
+  symbol: string,
+  interval: string,
+  limit: number,
+): Promise<Candle[]> {
+  const params = new URLSearchParams({ symbol, interval, limit: String(limit) })
+  const res = await fetch(`${REST}/klines?${params}`)
+  if (!res.ok) throw new Error(`Binance candles ${symbol} HTTP ${res.status}`)
+  const raw: [number, string, string, string, string, string][] = await res.json()
+  return raw.map(k => ({
+    time:   k[0],
+    open:   parseFloat(k[1]),
+    high:   parseFloat(k[2]),
+    low:    parseFloat(k[3]),
+    close:  parseFloat(k[4]),
+    volume: parseFloat(k[5]),
+  }))
 }
 
 // ─── Preço ao vivo de MON (multi-exchange fallback) ───────────────────────────

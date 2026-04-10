@@ -2,7 +2,8 @@ import './style.css'
 import type { PythPrice, TickerStats } from './types'
 import { streamPyth } from './pyth'
 import { connectTickerWS, startMonPolling } from './binance'
-import { renderPriceChart, tickPriceChart, renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart } from './charts'
+import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom } from './charts'
+import { createTradingChart, loadTradingChart, tickTradingChart } from './tradingChart'
 
 // ─── HTML ─────────────────────────────────────────────────────────────────────
 
@@ -89,20 +90,33 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
   <!-- Gráfico de preço BTC -->
   <div class="controls" id="range-controls">
-    <button data-days="1">24h</button>
-    <button data-days="7" class="active">7d</button>
-    <button data-days="30">30d</button>
-    <button data-days="90">90d</button>
-    <button data-days="365">1a</button>
+    <button data-days="1">15m · 24h</button>
+    <button data-days="7" class="active">1h · 7d</button>
+    <button data-days="30">4h · 30d</button>
+    <button data-days="90">1d · 90d</button>
+    <button data-days="365">1d · 1a</button>
   </div>
-  <div class="chart-wrap"><canvas id="chart-price"></canvas></div>
+  <div class="refresh-header">
+    <span class="refresh-label" id="rl-price">próximo reload em —</span>
+    <div class="refresh-track"><div class="refresh-fill" id="rf-price"></div></div>
+  </div>
+  <div class="chart-wrap" id="trading-chart"></div>
 
   <h2>Ciclos sobrepostos</h2>
   <p class="chart-sub">Comparação alinhada a partir do topo de cada ciclo</p>
+  <div class="refresh-header">
+    <span class="refresh-label" id="rl-cycles">próximo reload em —</span>
+    <div class="refresh-track"><div class="refresh-fill" id="rf-cycles"></div></div>
+  </div>
   <div class="chart-wrap" id="wrap-cycles"><canvas id="chart-cycles"></canvas></div>
 
   <h2>BTC · ETH · SOL · MON (normalizado base 100)</h2>
-  <p class="chart-sub">Comparação relativa desde o início da listagem do MON</p>
+  <p class="chart-sub">Comparação relativa desde o início da listagem do MON · scroll para zoom · arrastar para pan</p>
+  <div class="refresh-header">
+    <span class="refresh-label" id="rl-btcmon">atualização ao vivo via Pyth</span>
+    <div class="refresh-track"><div class="refresh-fill" id="rf-btcmon"></div></div>
+    <button id="btn-reset-zoom" style="padding:3px 10px;font-size:11px;margin-left:8px;">Reset zoom</button>
+  </div>
   <div class="chart-wrap" id="wrap-btcmon"><canvas id="chart-btcmon"></canvas></div>
 
   <footer class="footer">
@@ -165,7 +179,7 @@ streamPyth(
 
     // ── tick ao vivo nos 3 gráficos ──
     if (prices.BTC) {
-      tickPriceChart(prices.BTC.price)
+      tickTradingChart(prices.BTC.price)
       tickCyclesChart(prices.BTC.price)
     }
     tickComparisonChart({
@@ -173,6 +187,7 @@ streamPyth(
       ETH: prices.ETH?.price,
       SOL: prices.SOL?.price,
     })
+    pulseBtcmonBar()
 
     if (prices.BTC || prices.ETH || prices.SOL)
       statusEl.textContent = 'Ao vivo · Pyth ' + new Date().toLocaleTimeString('pt-BR')
@@ -235,7 +250,6 @@ connectTickerWS('BTCUSDT', onTick, onWsStatus)
 // ─── Range buttons ────────────────────────────────────────────────────────────
 
 let currentDays = 7
-const priceCanvas = $('chart-price') as HTMLCanvasElement
 
 $('range-controls').addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest('button')
@@ -243,25 +257,85 @@ $('range-controls').addEventListener('click', (e) => {
   currentDays = parseInt(btn.dataset.days ?? '7', 10)
   document.querySelectorAll('#range-controls button').forEach(b => b.classList.remove('active'))
   btn.classList.add('active')
-  renderPriceChart(priceCanvas, currentDays).catch(console.error)
+  loadTradingChart(currentDays).then(() => barPrice.reset()).catch(console.error)
 })
+
+document.getElementById('btn-reset-zoom')!.addEventListener('click', resetComparisonZoom)
 
 function chartError(wrapId: string, msg: string) {
   $(wrapId).innerHTML = `<div class="chart-err">${msg}</div>`
 }
 
+// ─── Barra de progresso de refresh ───────────────────────────────────────────
+
+class RefreshBar {
+  private fillEl: HTMLElement
+  private labelEl: HTMLElement
+  private intervalMs: number
+  private startTime = Date.now()
+  private fmtRemaining: (ms: number) => string
+
+  constructor(fillId: string, labelId: string, intervalMs: number, fmtFn?: (ms: number) => string) {
+    this.fillEl    = $(fillId)
+    this.labelEl   = $(labelId)
+    this.intervalMs = intervalMs
+    this.fmtRemaining = fmtFn ?? ((ms) => `próximo reload em ${Math.ceil(ms / 1000)}s`)
+    this.tick()
+  }
+
+  reset() { this.startTime = Date.now() }
+
+  private tick = () => {
+    const elapsed   = Date.now() - this.startTime
+    const remaining = Math.max(this.intervalMs - elapsed, 0)
+    const pct       = Math.min((elapsed / this.intervalMs) * 100, 100)
+    this.fillEl.style.width   = pct + '%'
+    this.labelEl.textContent  = this.fmtRemaining(remaining)
+    requestAnimationFrame(this.tick)
+  }
+}
+
+const fmtHMS = (ms: number) => {
+  const total = Math.ceil(ms / 1000)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  return h > 0
+    ? `próximo reload em ${h}h ${m}m`
+    : m > 0
+      ? `próximo reload em ${m}m ${s}s`
+      : `próximo reload em ${s}s`
+}
+
+const barPrice  = new RefreshBar('rf-price',  'rl-price',  60_000)
+const barCycles = new RefreshBar('rf-cycles', 'rl-cycles', 6 * 60 * 60 * 1000, fmtHMS)
+
+// barra do gráfico de comparação: pulsa a cada tick Pyth (~400ms)
+const rfBtcmon = $('rf-btcmon') as HTMLElement
+let btcmonPulse = 0
+function pulseBtcmonBar() {
+  clearTimeout(btcmonPulse)
+  rfBtcmon.style.width = '100%'
+  btcmonPulse = setTimeout(() => { rfBtcmon.style.width = '0%' }, 300) as unknown as number
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
-renderPriceChart(priceCanvas, currentDays).catch(console.error)
-setInterval(() => renderPriceChart(priceCanvas, currentDays).catch(console.error), 60_000)
+const tradingContainer = $('trading-chart') as HTMLElement
+createTradingChart(tradingContainer)
+loadTradingChart(currentDays).then(() => barPrice.reset()).catch(console.error)
+setInterval(() => {
+  loadTradingChart(currentDays).then(() => barPrice.reset()).catch(console.error)
+}, 60_000)
 
 const cyclesCanvas = $('chart-cycles') as HTMLCanvasElement
 
 const refreshCycles = () =>
-  renderCyclesChart(cyclesCanvas).catch(e => chartError('wrap-cycles', 'Erro ciclos: ' + (e as Error).message))
+  renderCyclesChart(cyclesCanvas)
+    .then(() => barCycles.reset())
+    .catch(e => chartError('wrap-cycles', 'Erro ciclos: ' + (e as Error).message))
 
 setTimeout(refreshCycles, 1500)
-// atualiza a cada 6h — candles diários mudam 1x por dia, mas o ciclo atual avança
 setInterval(refreshCycles, 6 * 60 * 60 * 1000)
 
 setTimeout(() => {
