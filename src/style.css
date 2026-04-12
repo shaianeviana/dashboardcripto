@@ -197,6 +197,72 @@ button.active { background: #1f6feb; border-color: #1f6feb; }
   font-size: 13px;
 }
 
+/* ── Fear & Greed ──────────────────────────────────────────────────────────── */
+.fng-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+
+.fng-number {
+  font-size: 64px;
+  font-weight: 700;
+  line-height: 1;
+  min-width: 110px;
+  text-align: center;
+}
+
+.fng-cls {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  text-align: center;
+  margin-top: 6px;
+}
+
+.fng-bar-wrap { flex: 1; min-width: 220px; }
+
+.fng-bar {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(to right, #f85149 0%, #e6855a 25%, #e6b450 50%, #7fb950 75%, #3fb950 100%);
+  position: relative;
+}
+
+.fng-pin {
+  position: absolute;
+  top: -5px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #e6edf3;
+  border: 3px solid #0d1117;
+  transform: translateX(-50%);
+  transition: left .8s ease;
+  box-shadow: 0 0 8px rgba(255,255,255,.2);
+}
+
+.fng-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #8b949e;
+  margin-top: 7px;
+}
+
+.fng-meta {
+  font-size: 11px;
+  color: #8b949e;
+  margin-top: 10px;
+}
+
 /* ── Footer ────────────────────────────────────────────────────────────────── */
 .footer {
   text-align: center;

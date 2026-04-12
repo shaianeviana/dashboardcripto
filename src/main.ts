@@ -1,4 +1,5 @@
 import './style.css'
+import { Chart } from 'chart.js'
 import type { PythPrice, TickerStats } from './types'
 import { streamPyth } from './pyth'
 import { connectTickerWS, startMonPolling } from './binance'
@@ -118,6 +119,27 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <button id="btn-reset-zoom" style="padding:3px 10px;font-size:11px;margin-left:8px;">Reset zoom</button>
   </div>
   <div class="chart-wrap" id="wrap-btcmon"><canvas id="chart-btcmon"></canvas></div>
+
+  <h2>Fear &amp; Greed Index</h2>
+  <p class="chart-sub">Índice de Medo e Ganância — últimos 30 dias · alternative.me</p>
+
+  <div class="fng-card">
+    <div>
+      <div class="fng-number" id="fg-num" style="color:#8b949e;">—</div>
+      <div class="fng-cls"    id="fg-cls" style="color:#8b949e;">carregando</div>
+    </div>
+    <div class="fng-bar-wrap">
+      <div class="fng-bar">
+        <div class="fng-pin" id="fg-pin" style="left:50%;"></div>
+      </div>
+      <div class="fng-ticks">
+        <span>Medo Extremo</span><span>Medo</span><span>Neutro</span><span>Ganância</span><span>Ganância Ext.</span>
+      </div>
+      <div class="fng-meta" id="fg-meta">aguardando dados...</div>
+    </div>
+  </div>
+
+  <div class="chart-wrap" id="fg-wrap"><canvas id="fg-canvas"></canvas></div>
 
   <footer class="footer">
     Created by <a href="https://x.com/shaianeviana" target="_blank" rel="noopener">shaianeviana</a>
@@ -342,3 +364,129 @@ setTimeout(() => {
   renderBtcMonChart($('chart-btcmon') as HTMLCanvasElement)
     .catch(e => chartError('wrap-btcmon', 'Erro: ' + (e as Error).message))
 }, 3000)
+
+// ─── Fear & Greed Index ───────────────────────────────────────────────────────
+
+const FG_CLASSES: Record<string, string> = {
+  'Extreme Fear': 'Medo Extremo',
+  'Fear': 'Medo',
+  'Neutral': 'Neutro',
+  'Greed': 'Ganância',
+  'Extreme Greed': 'Ganância Extrema',
+}
+
+function fgColor(v: number): string {
+  if (v <= 24) return '#f85149'
+  if (v <= 44) return '#e6855a'
+  if (v <= 54) return '#e6b450'
+  if (v <= 74) return '#7fb950'
+  return '#3fb950'
+}
+
+interface FngEntry { value: string; value_classification: string; timestamp: string; time_until_update?: string }
+
+async function fgTry(url: string, ms: number): Promise<FngEntry[]> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('timeout')), ms)
+    fetch(url)
+      .then(r => { clearTimeout(t); return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)) })
+      .then((j: { data?: FngEntry[] }) => (j?.data?.length) ? resolve(j.data) : reject(new Error('vazio')))
+      .catch(e => { clearTimeout(t); reject(e) })
+  })
+}
+
+let fgChartInstance: Chart | null = null
+
+async function loadFearGreed() {
+  const wrap   = $('fg-wrap') as HTMLElement
+  const meta   = $('fg-meta') as HTMLElement
+  meta.textContent = 'Buscando dados...'
+  wrap.innerHTML   = '<div style="color:#8b949e;padding:60px;text-align:center;font-size:13px;">Carregando Fear &amp; Greed Index...</div>'
+
+  const BASE = encodeURIComponent('https://api.alternative.me/fng/?limit=30')
+  const SRCS = [
+    'https://api.alternative.me/fng/?limit=30',
+    'https://api.allorigins.win/raw?url=' + BASE,
+    'https://corsproxy.io/?' + BASE,
+    'https://api.codetabs.com/v1/proxy?quest=' + BASE,
+  ]
+
+  let raw: FngEntry[]
+  try {
+    raw = await Promise.any(SRCS.map((url, i) => fgTry(url, 5000 + i * 2000)))
+  } catch {
+    meta.textContent = 'Falha em todas as fontes'
+    wrap.innerHTML = `<div style="color:#f85149;padding:40px;text-align:center;font-size:13px;">
+      Fear &amp; Greed Index indisponível<br>
+      <button onclick="loadFearGreed()" style="margin-top:14px;">Tentar novamente</button>
+    </div>`
+    return
+  }
+
+  wrap.innerHTML = '<canvas id="fg-canvas"></canvas>'
+
+  const today = raw[0]
+  const val   = parseInt(today.value)
+  const col   = fgColor(val)
+
+  ;($('fg-num') as HTMLElement).textContent = String(val);
+  ($('fg-num') as HTMLElement).style.color  = col;
+  ($('fg-cls') as HTMLElement).textContent  = FG_CLASSES[today.value_classification] ?? today.value_classification;
+  ($('fg-cls') as HTMLElement).style.color  = col;
+  ($('fg-pin') as HTMLElement).style.left   = val + '%'
+
+  const next = parseInt(today.time_until_update ?? '')
+  meta.textContent = isNaN(next)
+    ? 'fonte: alternative.me'
+    : `Atualiza em ${Math.floor(next / 3600)}h ${Math.floor((next % 3600) / 60)}m · fonte: alternative.me`
+
+  const pts    = [...raw].reverse()
+  const labels = pts.map(d => new Date(+d.timestamp * 1000).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }))
+  const vals   = pts.map(d => parseInt(d.value))
+  const colors = vals.map(fgColor)
+
+  if (fgChartInstance) { fgChartInstance.destroy(); fgChartInstance = null }
+  fgChartInstance = new Chart($('fg-canvas') as HTMLCanvasElement, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Fear & Greed',
+        data: vals,
+        borderColor: col,
+        backgroundColor: col + '22',
+        fill: true,
+        tension: .35,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        pointBackgroundColor: colors,
+        pointBorderColor: '#0d1117',
+        pointBorderWidth: 2,
+        borderWidth: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.parsed.y
+              const entry = pts[ctx.dataIndex]
+              return `${v} — ${FG_CLASSES[entry.value_classification] ?? entry.value_classification}`
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { color: '#8b949e', maxTicksLimit: 10 }, grid: { color: '#21262d' } },
+        y: { min: 0, max: 100, ticks: { color: '#8b949e', stepSize: 25 }, grid: { color: '#21262d' } },
+      },
+    },
+  })
+}
+
+setTimeout(loadFearGreed, 4500)
+setInterval(loadFearGreed, 5 * 60 * 1000)
