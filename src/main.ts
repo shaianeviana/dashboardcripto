@@ -3,7 +3,7 @@ import { Chart } from 'chart.js'
 import type { PythPrice, TickerStats } from './types'
 import { streamPyth } from './pyth'
 import { connectTickerWS, startMonPolling } from './binance'
-import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom } from './charts'
+import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom, renderBullBearTide, updateBullBearRange } from './charts'
 import { createTradingChart, loadTradingChart, tickTradingChart } from './tradingChart'
 
 // ─── HTML ─────────────────────────────────────────────────────────────────────
@@ -140,6 +140,39 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <div class="chart-wrap" id="fg-wrap"><canvas id="fg-canvas"></canvas></div>
+
+  <h2>Bull/Bear Tide</h2>
+  <p class="chart-sub">Desvio do preço BTC em relação à SMA 200 dias · verde = bull · vermelho = bear · dados desde 2014 · CoinGecko</p>
+
+  <div class="bbt-card">
+    <div class="bbt-col">
+      <div class="bbt-phase" id="bbt-phase">—</div>
+      <div class="bbt-sublabel">Fase atual</div>
+    </div>
+    <div class="bbt-col">
+      <div class="bbt-value" id="bbt-dev">—</div>
+      <div class="bbt-sublabel">Desvio vs SMA 200</div>
+    </div>
+    <div class="bbt-col">
+      <div class="bbt-value" id="bbt-sma">—</div>
+      <div class="bbt-sublabel">SMA 200 dias</div>
+    </div>
+    <div class="bbt-col">
+      <div class="bbt-value" id="bbt-price">—</div>
+      <div class="bbt-sublabel">Preço atual BTC</div>
+    </div>
+  </div>
+
+  <div class="controls" id="bbt-range-controls">
+    <button data-bbt="30">30d</button>
+    <button data-bbt="90">90d</button>
+    <button data-bbt="180">180d</button>
+    <button data-bbt="365">1a</button>
+    <button data-bbt="1825">5a</button>
+    <button data-bbt="all" class="active">All</button>
+  </div>
+
+  <div class="chart-wrap" id="bbt-wrap"><canvas id="bbt-canvas"></canvas></div>
 
   <footer class="footer">
     Created by <a href="https://x.com/shaianeviana" target="_blank" rel="noopener">shaianeviana</a>
@@ -490,3 +523,42 @@ async function loadFearGreed() {
 
 setTimeout(loadFearGreed, 4500)
 setInterval(loadFearGreed, 5 * 60 * 1000)
+
+// ─── Bull/Bear Tide ───────────────────────────────────────────────────────────
+
+async function loadBullBearTide() {
+  const wrap = $('bbt-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="bbt-canvas"></canvas>'
+  try {
+    const canvas = $('bbt-canvas') as HTMLCanvasElement
+    const { deviation, sma200, price } = await renderBullBearTide(canvas, 'all')
+
+    const isBull = deviation >= 0
+    const col    = isBull ? '#3fb950' : '#f85149'
+    const sign   = deviation >= 0 ? '+' : ''
+
+    const phaseEl = $('bbt-phase') as HTMLElement
+    phaseEl.textContent = isBull ? 'BULL' : 'BEAR'
+    phaseEl.style.color = col
+
+    ;($('bbt-dev')   as HTMLElement).textContent = `${sign}${deviation.toFixed(2)}%`
+    ;($('bbt-dev')   as HTMLElement).style.color = col
+    ;($('bbt-sma')   as HTMLElement).textContent = '$' + sma200.toLocaleString('en-US', { maximumFractionDigits: 0 })
+    ;($('bbt-price') as HTMLElement).textContent = '$' + price.toLocaleString('en-US',  { maximumFractionDigits: 0 })
+  } catch (e) {
+    chartError('bbt-wrap', 'Erro Bull/Bear Tide: ' + (e as Error).message)
+  }
+}
+
+// Botões de range
+$('bbt-range-controls').addEventListener('click', e => {
+  const btn = (e.target as HTMLElement).closest('button[data-bbt]') as HTMLButtonElement | null
+  if (!btn) return
+  document.querySelectorAll('#bbt-range-controls button').forEach(b => b.classList.remove('active'))
+  btn.classList.add('active')
+  const raw = btn.dataset.bbt!
+  updateBullBearRange(raw === 'all' ? 'all' : parseInt(raw, 10))
+})
+
+setTimeout(loadBullBearTide, 5500)
+setInterval(loadBullBearTide, 12 * 60 * 60 * 1000)

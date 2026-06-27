@@ -263,6 +263,82 @@ button.active { background: #1f6feb; border-color: #1f6feb; }
   margin-top: 10px;
 }
 
+/* ── Bull/Bear Tide ────────────────────────────────────────────────────────── */
+.bbt-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+
+.bbt-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 110px;
+}
+
+.bbt-phase {
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  line-height: 1;
+}
+
+.bbt-value {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #e6edf3;
+}
+
+.bbt-sublabel {
+  font-size: 11px;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-top: 6px;
+  text-align: center;
+}
+
+/* Wrapper duplo (preço em cima + barras embaixo) */
+.bbt-dual-wrap {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+  height: 500px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-bottom: 20px;
+  position: relative;
+}
+
+.bbt-top-panel {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+.bbt-divider {
+  height: 1px;
+  background: #30363d;
+  margin: 6px 0;
+  flex-shrink: 0;
+}
+
+.bbt-bottom-panel {
+  flex: 1.4;
+  position: relative;
+  min-height: 0;
+}
+
 /* ── Footer ────────────────────────────────────────────────────────────────── */
 .footer {
   text-align: center;

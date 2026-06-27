@@ -2,6 +2,8 @@ import {
   Chart,
   LineController,
   LineElement,
+  BarController,
+  BarElement,
   PointElement,
   LinearScale,
   CategoryScale,
@@ -14,7 +16,7 @@ import zoomPlugin from 'chartjs-plugin-zoom'
 import type { Kline } from './types'
 import { fetchKlines } from './binance'
 
-Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, TimeScale, Filler, Legend, Tooltip, zoomPlugin)
+Chart.register(LineController, LineElement, BarController, BarElement, PointElement, LinearScale, CategoryScale, TimeScale, Filler, Legend, Tooltip, zoomPlugin)
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -470,6 +472,214 @@ export async function renderBtcMonChart(canvas: HTMLCanvasElement): Promise<void
 export function resetComparisonZoom(): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ;(compChart as any)?.resetZoom()
+}
+
+// ─── Bull/Bear Tide ───────────────────────────────────────────────────────────
+
+export interface BullBearResult {
+  deviation: number
+  sma200: number
+  price: number
+}
+
+interface BbtCache {
+  labels:     string[]
+  deviations: number[]
+  prices:     number[]
+  sma200vals: number[]
+}
+
+let bbtCache: BbtCache | null = null
+let bullBearTideChart: Chart | null = null
+
+/** Busca histórico completo do BTC — CryptoCompare (2014→hoje) com fallback Binance paginado */
+async function fetchBtcHistory(): Promise<{ time: number; price: number }[]> {
+
+  // ── 1) CryptoCompare: gratuito, CORS liberado, dados desde 2010 ─────────
+  try {
+    const cc = async (toTs?: number): Promise<{ time: number; price: number }[]> => {
+      const base = 'https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USD&limit=2000'
+      const url  = toTs ? base + '&toTs=' + toTs : base
+      const r    = await fetch(url, { signal: AbortSignal.timeout(12_000) })
+      if (!r.ok) throw new Error('CC HTTP ' + r.status)
+      const j: { Data?: { Data?: { time: number; close: number }[] } } = await r.json()
+      const rows = j?.Data?.Data ?? []
+      return rows
+        .filter(d => d.close > 0)
+        .map(d => ({ time: d.time * 1000, price: d.close }))
+    }
+
+    // Bloco recente (últimos ~5.5 anos)
+    const recent = await cc()
+    if (recent.length < 100) throw new Error('CC: poucos dados')
+
+    // Bloco antigo (antes do mais antigo do bloco recente)
+    const oldestSec = Math.floor(recent[0].time / 1000)
+    const older     = await cc(oldestSec)
+
+    // Mescla sem duplicatas
+    const combined = [
+      ...older.filter(d => d.time < recent[0].time),
+      ...recent,
+    ]
+    if (combined.length > 500) return combined
+  } catch { /* passa para fallback */ }
+
+  // ── 2) Fallback: Binance paginado (agosto/2017→hoje) ────────────────────
+  const DAY_MS    = 86_400_000
+  const allData:  { time: number; price: number }[] = []
+  let startTime   = new Date('2017-08-17').getTime()
+
+  while (startTime < Date.now()) {
+    const batch = await fetchKlines('BTCUSDT', '1d', 1000, startTime)
+    if (!batch.length) break
+    allData.push(...batch.map(k => ({ time: k.time, price: k.close })))
+    if (batch.length < 1000) break
+    startTime = batch[batch.length - 1].time + DAY_MS
+  }
+
+  if (allData.length > 200) return allData
+  throw new Error('Histórico BTC indisponível')
+}
+
+/** Slicing por quantidade de dias a exibir (ou 'all') */
+function bbtSlice(cache: BbtCache, days: number | 'all'): BbtCache {
+  if (days === 'all') return cache
+  const n = Math.min(days, cache.labels.length)
+  return {
+    labels:     cache.labels.slice(-n),
+    deviations: cache.deviations.slice(-n),
+    prices:     cache.prices.slice(-n),
+    sma200vals: cache.sma200vals.slice(-n),
+  }
+}
+
+/** Atualiza o gráfico único para um novo range sem refetch */
+export function updateBullBearRange(days: number | 'all'): void {
+  if (!bbtCache || !bullBearTideChart) return
+  const v  = bbtSlice(bbtCache, days)
+  const bg = v.deviations.map(d => d >= 0 ? '#3fb95088' : '#f8514988')
+
+  bullBearTideChart.data.labels                      = v.labels
+  bullBearTideChart.data.datasets[0].data            = v.deviations
+  bullBearTideChart.data.datasets[0].backgroundColor = bg
+  bullBearTideChart.data.datasets[1].data            = v.prices
+  bullBearTideChart.update()   // update completo → recalcula os ticks do eixo X
+}
+
+export async function renderBullBearTide(
+  canvas: HTMLCanvasElement,
+  days: number | 'all' = 'all',
+): Promise<BullBearResult> {
+  // ── Busca e processa dados (com cache) ────────────────────────────────────
+  if (!bbtCache) {
+    const raw    = await fetchBtcHistory()
+    const prices = raw.map(d => d.price)
+
+    // SMA 200
+    const sma200: number[] = prices.map((_, i) => {
+      if (i < 199) return NaN
+      let s = 0; for (let k = i - 199; k <= i; k++) s += prices[k]
+      return s / 200
+    })
+
+    const start        = 199
+    const slicedRaw    = raw.slice(start)
+    const slicedPrices = prices.slice(start)
+    const slicedSma    = sma200.slice(start)
+
+    bbtCache = {
+      labels:     slicedRaw.map(d =>
+        new Date(d.time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+      ),
+      deviations: slicedPrices.map((p, i) =>
+        parseFloat(((p - slicedSma[i]) / slicedSma[i] * 100).toFixed(2))),
+      prices:     slicedPrices,
+      sma200vals: slicedSma,
+    }
+  }
+
+  const v  = bbtSlice(bbtCache, days)
+  const bg = v.deviations.map(d => d >= 0 ? '#3fb95088' : '#f8514988')
+
+  // ── Gráfico único: barras bull/bear (esq.) + linha de preço (dir.) ────────
+  bullBearTideChart = destroy(bullBearTideChart)
+  bullBearTideChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: v.labels,
+      datasets: [
+        {
+          type: 'bar' as const,
+          label: 'Desvio SMA 200',
+          data: v.deviations,
+          backgroundColor: bg,
+          borderWidth: 0,
+          yAxisID: 'yDev',
+          order: 2,
+        },
+        {
+          type: 'line' as const,
+          label: 'BTC Price',
+          data: v.prices,
+          borderColor: '#e6edf3cc',
+          borderWidth: 1.5,
+          fill: false,
+          tension: 0.15,
+          pointRadius: 0,
+          yAxisID: 'yPrice',
+          order: 1,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index' as const,
+          intersect: false,
+          callbacks: {
+            title: items => items[0]?.label ?? '',
+            label: ctx => {
+              if (ctx.datasetIndex === 0) {
+                const val  = ctx.parsed.y ?? 0
+                const sign = val >= 0 ? '+' : ''
+                return `${val >= 0 ? 'BULL' : 'BEAR'}: ${sign}${val.toFixed(2)}% vs SMA 200`
+              }
+              const price = ctx.parsed.y ?? 0
+              return `BTC: $${price.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
+        yDev: {
+          position: 'left' as const,
+          ticks: { color: '#8b949e', callback: v => Number(v).toFixed(0) + '%' },
+          grid: { color: (ctx) => ctx.tick.value === 0 ? '#ffffff55' : GRID },
+        },
+        yPrice: {
+          position: 'right' as const,
+          ticks: {
+            color: '#8b949e',
+            callback: v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }),
+          },
+          grid: { drawOnChartArea: false },
+        },
+      },
+    },
+  })
+
+  const last = v.deviations.length - 1
+  return {
+    deviation: v.deviations[last],
+    sma200:    v.sma200vals[last],
+    price:     v.prices[last],
+  }
 }
 
 /** Atualiza os últimos pontos de BTC/ETH/SOL com preços ao vivo */
