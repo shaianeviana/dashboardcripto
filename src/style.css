@@ -339,6 +339,81 @@ button.active { background: #1f6feb; border-color: #1f6feb; }
   min-height: 0;
 }
 
+/* ── NUPL Card ─────────────────────────────────────────────────────────────── */
+.nupl-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 40px;
+  flex-wrap: wrap;
+}
+
+.nupl-main-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 160px;
+}
+
+.nupl-phase {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.nupl-value {
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.nupl-sublabel {
+  font-size: 11px;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-top: 5px;
+  text-align: center;
+}
+
+.nupl-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  justify-content: center;
+}
+
+.nupl-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #8b949e;
+}
+
+.nupl-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Liquidation Heatmap ───────────────────────────────────────────────────── */
+.heatmap-wrap {
+  height: 480px;
+  padding: 16px;
+}
+
+.heatmap-wrap canvas {
+  display: block;
+}
+
 /* ── Footer ────────────────────────────────────────────────────────────────── */
 .footer {
   text-align: center;

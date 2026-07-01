@@ -3,8 +3,9 @@ import { Chart } from 'chart.js'
 import type { PythPrice, TickerStats } from './types'
 import { streamPyth } from './pyth'
 import { connectTickerWS, startMonPolling } from './binance'
-import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom, renderBullBearTide, updateBullBearRange } from './charts'
+import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom, renderBullBearTide, updateBullBearRange, renderNuplLth, renderMvrvRatio, renderRealizedPL } from './charts'
 import { createTradingChart, loadTradingChart, tickTradingChart } from './tradingChart'
+import { renderLiquidationHeatmap } from './heatmap'
 
 // ─── HTML ─────────────────────────────────────────────────────────────────────
 
@@ -173,6 +174,70 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <div class="chart-wrap" id="bbt-wrap"><canvas id="bbt-canvas"></canvas></div>
+
+  <h2>NUPL · Long-Term Holders</h2>
+  <p class="chart-sub">Net Unrealized Profit/Loss — ciclos de mercado BTC · dados CoinMetrics · escala de preço logarítmica</p>
+
+  <div class="nupl-card">
+    <div class="nupl-main-col">
+      <div class="nupl-phase" id="nupl-phase">—</div>
+      <div class="nupl-sublabel">Fase atual</div>
+      <div class="nupl-value" id="nupl-value" style="margin-top:10px;">—</div>
+      <div class="nupl-sublabel">NUPL</div>
+    </div>
+    <div class="nupl-legend">
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#f85149"></span>Capitulation (&lt; 0)</div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#e6855a"></span>Hope → Fear (0 – 0.25)</div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#e6b450"></span>Optimism → Anxiety (0.25 – 0.5)</div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#3fb950"></span>Belief → Denial (0.5 – 0.75)</div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#58a6ff"></span>Euphoria → Greed (&gt; 0.75)</div>
+    </div>
+  </div>
+
+  <div class="chart-wrap" id="nupl-wrap"><canvas id="nupl-canvas"></canvas></div>
+
+  <h2>MVRV Ratio</h2>
+  <p class="chart-sub">Market Value to Realized Value — MVRV &lt; 1 = capitulação · &gt; 3.5 = overvalorizado · escala de preço logarítmica · dados CoinMetrics</p>
+
+  <div class="nupl-card">
+    <div class="nupl-main-col">
+      <div class="nupl-phase" id="mvrv-phase">—</div>
+      <div class="nupl-sublabel">Fase atual</div>
+      <div class="nupl-value" id="mvrv-value" style="margin-top:10px;">—</div>
+      <div class="nupl-sublabel">MVRV</div>
+    </div>
+    <div class="nupl-legend">
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#3b82f6"></span>Capitulation (&lt; 1×)</div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#22d3ee"></span>Accumulation (1× – 2×)</div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#3fb950"></span>Bull Market (2× – 3.5×)</div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#e6b450"></span>Overvalued (3.5× – 5.5×)</div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#f85149"></span>Market Top (&gt; 5.5×)</div>
+    </div>
+  </div>
+
+  <div class="chart-wrap" id="mvrv-wrap"><canvas id="mvrv-canvas"></canvas></div>
+
+  <h2>Liquidation Heatmap</h2>
+  <p class="chart-sub">Concentração de posições por nível de preço · azul escuro = baixa densidade · ciano/verde = alta · dados Binance 4h</p>
+
+  <div class="controls" id="liq-range-controls">
+    <button data-liq="30" class="active">30d</button>
+    <button data-liq="90">90d</button>
+    <button data-liq="180">180d</button>
+  </div>
+
+  <div class="chart-wrap heatmap-wrap" id="liq-wrap"><canvas id="liq-canvas"></canvas></div>
+
+  <h2>Realized P/L por Faixa Etária</h2>
+  <p class="chart-sub">Lucro/prejuízo realizado estimado por tempo de posse · barras acima = lucro · abaixo = perda · dados CryptoCompare (aproximação via SMA)</p>
+
+  <div class="controls" id="rpl-range-controls">
+    <button data-rpl="180">180d</button>
+    <button data-rpl="365" class="active">1a</button>
+    <button data-rpl="730">2a</button>
+  </div>
+
+  <div class="chart-wrap" id="rpl-wrap" style="height:460px"><canvas id="rpl-canvas"></canvas></div>
 
   <footer class="footer">
     Created by <a href="https://x.com/shaianeviana" target="_blank" rel="noopener">shaianeviana</a>
@@ -562,3 +627,104 @@ $('bbt-range-controls').addEventListener('click', e => {
 
 setTimeout(loadBullBearTide, 5500)
 setInterval(loadBullBearTide, 12 * 60 * 60 * 1000)
+
+// ─── NUPL-LTH ─────────────────────────────────────────────────────────────────
+
+async function loadNuplLth() {
+  const wrap = $('nupl-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="nupl-canvas"></canvas>'
+  try {
+    const canvas = $('nupl-canvas') as HTMLCanvasElement
+    const { nupl, phase, color } = await renderNuplLth(canvas)
+
+    const phaseEl = $('nupl-phase') as HTMLElement
+    phaseEl.textContent = phase
+    phaseEl.style.color = color
+
+    const valueEl = $('nupl-value') as HTMLElement
+    valueEl.textContent = nupl.toFixed(3)
+    valueEl.style.color = color
+  } catch (e) {
+    chartError('nupl-wrap', 'Erro NUPL: ' + (e as Error).message)
+  }
+}
+
+setTimeout(loadNuplLth, 7000)
+setInterval(loadNuplLth, 12 * 60 * 60 * 1000)
+
+// ─── MVRV Ratio ────────────────────────────────────────────────────────────────
+
+async function loadMvrvRatio() {
+  const wrap = $('mvrv-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="mvrv-canvas"></canvas>'
+  try {
+    const canvas = $('mvrv-canvas') as HTMLCanvasElement
+    const { mvrv, phase, color } = await renderMvrvRatio(canvas)
+
+    const phaseEl = $('mvrv-phase') as HTMLElement
+    phaseEl.textContent = phase
+    phaseEl.style.color = color
+
+    const valueEl = $('mvrv-value') as HTMLElement
+    valueEl.textContent = mvrv.toFixed(3) + '×'
+    valueEl.style.color = color
+  } catch (e) {
+    chartError('mvrv-wrap', 'Erro MVRV: ' + (e as Error).message)
+  }
+}
+
+setTimeout(loadMvrvRatio, 8500)
+setInterval(loadMvrvRatio, 12 * 60 * 60 * 1000)
+
+// ─── Liquidation Heatmap ───────────────────────────────────────────────────────
+
+let liqDays = 30
+
+async function loadLiqHeatmap() {
+  const wrap = $('liq-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="liq-canvas"></canvas>'
+  try {
+    const canvas = $('liq-canvas') as HTMLCanvasElement
+    await renderLiquidationHeatmap(canvas, liqDays)
+  } catch (e) {
+    chartError('liq-wrap', 'Erro Heatmap: ' + (e as Error).message)
+  }
+}
+
+$('liq-range-controls').addEventListener('click', e => {
+  const btn = (e.target as HTMLElement).closest('button[data-liq]') as HTMLButtonElement | null
+  if (!btn) return
+  document.querySelectorAll('#liq-range-controls button').forEach(b => b.classList.remove('active'))
+  btn.classList.add('active')
+  liqDays = parseInt(btn.dataset.liq!, 10)
+  loadLiqHeatmap()
+})
+
+setTimeout(loadLiqHeatmap, 10000)
+setInterval(loadLiqHeatmap, 5 * 60 * 1000)
+
+// ─── Realized P/L ──────────────────────────────────────────────────────────────
+
+let rplDays = 365
+
+async function loadRealizedPL() {
+  const wrap = $('rpl-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="rpl-canvas"></canvas>'
+  try {
+    await renderRealizedPL($('rpl-canvas') as HTMLCanvasElement, rplDays)
+  } catch (e) {
+    chartError('rpl-wrap', 'Erro Realized P/L: ' + (e as Error).message)
+  }
+}
+
+$('rpl-range-controls').addEventListener('click', e => {
+  const btn = (e.target as HTMLElement).closest('button[data-rpl]') as HTMLButtonElement | null
+  if (!btn) return
+  document.querySelectorAll('#rpl-range-controls button').forEach(b => b.classList.remove('active'))
+  btn.classList.add('active')
+  rplDays = parseInt(btn.dataset.rpl!, 10)
+  loadRealizedPL()
+})
+
+setTimeout(loadRealizedPL, 12000)
+setInterval(loadRealizedPL, 6 * 60 * 60 * 1000)

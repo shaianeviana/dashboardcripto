@@ -6,6 +6,7 @@ import {
   BarElement,
   PointElement,
   LinearScale,
+  LogarithmicScale,
   CategoryScale,
   TimeScale,
   Filler,
@@ -14,9 +15,9 @@ import {
 } from 'chart.js'
 import zoomPlugin from 'chartjs-plugin-zoom'
 import type { Kline } from './types'
-import { fetchKlines } from './binance'
+import { fetchKlines, fetchCandles } from './binance'
 
-Chart.register(LineController, LineElement, BarController, BarElement, PointElement, LinearScale, CategoryScale, TimeScale, Filler, Legend, Tooltip, zoomPlugin)
+Chart.register(LineController, LineElement, BarController, BarElement, PointElement, LinearScale, LogarithmicScale, CategoryScale, TimeScale, Filler, Legend, Tooltip, zoomPlugin)
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -680,6 +681,604 @@ export async function renderBullBearTide(
     sma200:    v.sma200vals[last],
     price:     v.prices[last],
   }
+}
+
+// ─── NUPL (Net Unrealized Profit/Loss) ───────────────────────────────────────
+
+export interface NuplResult {
+  nupl:  number
+  phase: string
+  color: string
+}
+
+const NUPL_PHASES = [
+  { min: -Infinity, label: 'Capitulation',       color: '#f85149' },
+  { min: 0,         label: 'Hope → Fear',         color: '#e6855a' },
+  { min: 0.25,      label: 'Optimism → Anxiety',  color: '#e6b450' },
+  { min: 0.5,       label: 'Belief → Denial',     color: '#3fb950' },
+  { min: 0.75,      label: 'Euphoria → Greed',    color: '#58a6ff' },
+] as const
+
+function nuplPhaseInfo(v: number): { label: string; color: string } {
+  for (let i = NUPL_PHASES.length - 1; i >= 0; i--) {
+    if (v >= NUPL_PHASES[i].min) return NUPL_PHASES[i]
+  }
+  return NUPL_PHASES[0]
+}
+
+const nuplZonesPlugin = {
+  id: 'nuplZones',
+  beforeDatasetsDraw(chart: Chart) {
+    const { ctx, chartArea, scales } = chart
+    const y = scales['yNupl']
+    if (!chartArea || !y) return
+
+    const zones = [
+      { from: -Infinity, to: 0,        fill: '#f8514914' },
+      { from: 0,         to: 0.25,     fill: '#e6855a14' },
+      { from: 0.25,      to: 0.5,      fill: '#e6b45014' },
+      { from: 0.5,       to: 0.75,     fill: '#3fb95014' },
+      { from: 0.75,      to: Infinity, fill: '#58a6ff14' },
+    ]
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(chartArea.left, chartArea.top, chartArea.width, chartArea.height)
+    ctx.clip()
+
+    for (const zone of zones) {
+      const top    = y.getPixelForValue(Math.min(zone.to,   y.max))
+      const bottom = y.getPixelForValue(Math.max(zone.from, y.min))
+      ctx.fillStyle = zone.fill
+      ctx.fillRect(chartArea.left, top, chartArea.width, bottom - top)
+    }
+
+    const y0 = y.getPixelForValue(0)
+    if (y0 >= chartArea.top && y0 <= chartArea.bottom) {
+      ctx.strokeStyle = '#ffffff33'
+      ctx.lineWidth   = 1
+      ctx.setLineDash([5, 5])
+      ctx.beginPath()
+      ctx.moveTo(chartArea.left, y0)
+      ctx.lineTo(chartArea.right, y0)
+      ctx.stroke()
+      ctx.setLineDash([])
+    }
+
+    ctx.restore()
+  },
+}
+
+let nuplChart: Chart | null = null
+let mvrvChart: Chart | null = null
+
+interface CMRow {
+  time:           string
+  CapMrktCurUSD?: string | null
+  CapRealUSD?:    string | null
+  PriceUSD?:      string | null
+}
+
+let cmRowsCache: CMRow[] | null = null
+
+async function fetchNuplRows(): Promise<CMRow[]> {
+  if (cmRowsCache) return cmRowsCache
+
+  const BASE = 'https://api.coinmetrics.io/v4/timeseries/asset-metrics' +
+               '?assets=btc&metrics=CapMrktCurUSD,CapRealUSD,PriceUSD&frequency=1d&page_size=5000'
+  const SRCS = [
+    BASE,
+    'https://community-api.coinmetrics.io/v4/timeseries/asset-metrics' +
+      '?assets=btc&metrics=CapMrktCurUSD,CapRealUSD,PriceUSD&frequency=1d&page_size=5000',
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(BASE),
+    'https://corsproxy.io/?' + encodeURIComponent(BASE),
+  ]
+
+  for (const url of SRCS) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+      if (!r.ok) continue
+      const j: { data?: CMRow[] } = await r.json()
+      const rows = (j.data ?? []).filter(d => d.CapMrktCurUSD && d.CapRealUSD)
+      if (rows.length >= 100) { cmRowsCache = rows; return rows }
+    } catch { /* próximo */ }
+  }
+  return []
+}
+
+export async function renderNuplLth(canvas: HTMLCanvasElement): Promise<NuplResult> {
+  let labels:    string[]
+  let nuplVals:  number[]
+  let priceVals: number[]
+
+  const cmRows = await fetchNuplRows()
+
+  if (cmRows.length >= 100) {
+    // ── CoinMetrics: NUPL real (MarketCap - RealizedCap) / MarketCap ─────────
+    labels    = cmRows.map(d =>
+      new Date(d.time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+    )
+    nuplVals  = cmRows.map(d => {
+      const mkt  = parseFloat(d.CapMrktCurUSD!)
+      const real = parseFloat(d.CapRealUSD!)
+      return parseFloat(((mkt - real) / mkt).toFixed(4))
+    })
+    priceVals = cmRows.map(d => (d.PriceUSD ? parseFloat(d.PriceUSD) : NaN))
+  } else {
+    // ── Fallback: aproximação pela média móvel de 200 semanas ─────────────────
+    const raw    = await fetchBtcHistory()
+    const prices = raw.map(d => d.price)
+    const WMA    = 1400  // 200 semanas ≈ custo médio de holders de longo prazo
+
+    labels    = []
+    nuplVals  = []
+    priceVals = []
+
+    for (let i = WMA - 1; i < raw.length; i++) {
+      let sum = 0
+      for (let k = i - WMA + 1; k <= i; k++) sum += prices[k]
+      const wma  = sum / WMA
+      const p    = prices[i]
+      labels.push(new Date(raw[i].time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' }))
+      nuplVals.push(parseFloat(((p - wma) / p).toFixed(4)))
+      priceVals.push(p)
+    }
+  }
+
+  if (nuplVals.length < 100) throw new Error('Dados NUPL insuficientes')
+
+
+  const lastNupl  = nuplVals[nuplVals.length - 1]
+  const lastPhase = nuplPhaseInfo(lastNupl)
+
+  nuplChart = destroy(nuplChart)
+  nuplChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'line' as const,
+          label: 'NUPL',
+          data: nuplVals,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          segment: { borderColor: (ctx: any) => nuplPhaseInfo(nuplVals[ctx.p1DataIndex] ?? 0).color } as never,
+          borderColor: lastPhase.color,
+          borderWidth: 1.8,
+          fill: false,
+          tension: 0.2,
+          pointRadius: 0,
+          yAxisID: 'yNupl',
+          order: 1,
+        },
+        {
+          type: 'line' as const,
+          label: 'BTC Price',
+          data: priceVals,
+          borderColor: '#e6edf344',
+          borderWidth: 1,
+          fill: false,
+          tension: 0.15,
+          pointRadius: 0,
+          yAxisID: 'yPrice',
+          order: 2,
+          spanGaps: true,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index' as const, intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1c2128',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          padding: 10,
+          callbacks: {
+            title: items => items[0]?.label ?? '',
+            label: ctx => {
+              if (ctx.datasetIndex === 0) {
+                const v = ctx.parsed.y ?? 0
+                return `NUPL: ${v.toFixed(3)} — ${nuplPhaseInfo(v).label}`
+              }
+              const p = ctx.parsed.y ?? 0
+              return `BTC: $${p.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
+        yNupl: {
+          position: 'left' as const,
+          ticks: { color: '#8b949e', callback: v => Number(v).toFixed(2) },
+          grid: { color: GRID },
+        },
+        yPrice: {
+          position: 'right' as const,
+          type: 'logarithmic' as const,
+          ticks: {
+            color: '#8b949e',
+            callback: v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }),
+            maxTicksLimit: 6,
+          },
+          grid: { drawOnChartArea: false },
+        },
+      },
+    },
+    plugins: [nuplZonesPlugin],
+  })
+
+  return { nupl: lastNupl, phase: lastPhase.label, color: lastPhase.color }
+}
+
+// ─── MVRV Ratio ───────────────────────────────────────────────────────────────
+
+export interface MvrvResult {
+  mvrv:  number
+  phase: string
+  color: string
+}
+
+const MVRV_PHASES = [
+  { min: -Infinity, label: 'Capitulation', color: '#3b82f6' },
+  { min: 1,         label: 'Accumulation', color: '#22d3ee' },
+  { min: 2,         label: 'Bull Market',  color: '#3fb950' },
+  { min: 3.5,       label: 'Overvalued',   color: '#e6b450' },
+  { min: 5.5,       label: 'Market Top',   color: '#f85149' },
+] as const
+
+function mvrvPhaseInfo(v: number): { label: string; color: string } {
+  for (let i = MVRV_PHASES.length - 1; i >= 0; i--) {
+    if (v >= MVRV_PHASES[i].min) return MVRV_PHASES[i]
+  }
+  return MVRV_PHASES[0]
+}
+
+const mvrvZonesPlugin = {
+  id: 'mvrvZones',
+  beforeDatasetsDraw(chart: Chart) {
+    const { ctx, chartArea, scales } = chart
+    const y = scales['yMvrv']
+    if (!chartArea || !y) return
+
+    const zones = [
+      { from: -Infinity, to: 1,        fill: '#3b82f614' },
+      { from: 1,         to: 2,        fill: '#22d3ee14' },
+      { from: 2,         to: 3.5,      fill: '#3fb95014' },
+      { from: 3.5,       to: 5.5,      fill: '#e6b45014' },
+      { from: 5.5,       to: Infinity, fill: '#f8514914' },
+    ]
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(chartArea.left, chartArea.top, chartArea.width, chartArea.height)
+    ctx.clip()
+
+    for (const zone of zones) {
+      const top    = y.getPixelForValue(Math.min(zone.to,   y.max))
+      const bottom = y.getPixelForValue(Math.max(zone.from, y.min))
+      ctx.fillStyle = zone.fill
+      ctx.fillRect(chartArea.left, top, chartArea.width, bottom - top)
+    }
+
+    const y1 = y.getPixelForValue(1)
+    if (y1 >= chartArea.top && y1 <= chartArea.bottom) {
+      ctx.strokeStyle = '#ffffff33'
+      ctx.lineWidth   = 1
+      ctx.setLineDash([5, 5])
+      ctx.beginPath()
+      ctx.moveTo(chartArea.left, y1)
+      ctx.lineTo(chartArea.right, y1)
+      ctx.stroke()
+      ctx.setLineDash([])
+    }
+
+    ctx.restore()
+  },
+}
+
+export async function renderMvrvRatio(canvas: HTMLCanvasElement): Promise<MvrvResult> {
+  let labels:    string[]
+  let mvrvVals:  number[]
+  let priceVals: number[]
+
+  const cmRows = await fetchNuplRows()
+
+  if (cmRows.length >= 100) {
+    labels    = cmRows.map(d =>
+      new Date(d.time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+    )
+    mvrvVals  = cmRows.map(d => {
+      const mkt  = parseFloat(d.CapMrktCurUSD!)
+      const real = parseFloat(d.CapRealUSD!)
+      return parseFloat((mkt / real).toFixed(4))
+    })
+    priceVals = cmRows.map(d => (d.PriceUSD ? parseFloat(d.PriceUSD) : NaN))
+  } else {
+    // fallback: MVRV ≈ Preço / SMA 200 semanas
+    const raw    = await fetchBtcHistory()
+    const prices = raw.map(d => d.price)
+    const WMA    = 1400
+
+    labels    = []
+    mvrvVals  = []
+    priceVals = []
+
+    for (let i = WMA - 1; i < raw.length; i++) {
+      let sum = 0
+      for (let k = i - WMA + 1; k <= i; k++) sum += prices[k]
+      const wma = sum / WMA
+      const p   = prices[i]
+      labels.push(new Date(raw[i].time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' }))
+      mvrvVals.push(parseFloat((p / wma).toFixed(4)))
+      priceVals.push(p)
+    }
+  }
+
+  if (mvrvVals.length < 100) throw new Error('Dados MVRV insuficientes')
+
+  const lastMvrv  = mvrvVals[mvrvVals.length - 1]
+  const lastPhase = mvrvPhaseInfo(lastMvrv)
+
+  mvrvChart = destroy(mvrvChart)
+  mvrvChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'line' as const,
+          label: 'MVRV',
+          data: mvrvVals,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          segment: { borderColor: (ctx: any) => mvrvPhaseInfo(mvrvVals[ctx.p1DataIndex] ?? 0).color } as never,
+          borderColor: lastPhase.color,
+          borderWidth: 1.8,
+          fill: false,
+          tension: 0.2,
+          pointRadius: 0,
+          yAxisID: 'yMvrv',
+          order: 1,
+        },
+        {
+          type: 'line' as const,
+          label: 'BTC Price',
+          data: priceVals,
+          borderColor: '#e6edf344',
+          borderWidth: 1,
+          fill: false,
+          tension: 0.15,
+          pointRadius: 0,
+          yAxisID: 'yPrice',
+          order: 2,
+          spanGaps: true,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index' as const, intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1c2128',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          padding: 10,
+          callbacks: {
+            title: items => items[0]?.label ?? '',
+            label: ctx => {
+              if (ctx.datasetIndex === 0) {
+                const v = ctx.parsed.y ?? 0
+                return `MVRV: ${v.toFixed(3)}× — ${mvrvPhaseInfo(v).label}`
+              }
+              const p = ctx.parsed.y ?? 0
+              return `BTC: $${p.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
+        yMvrv: {
+          position: 'left' as const,
+          min: 0,
+          ticks: { color: '#8b949e', callback: v => Number(v).toFixed(1) + '×' },
+          grid: { color: GRID },
+        },
+        yPrice: {
+          position: 'right' as const,
+          type: 'logarithmic' as const,
+          ticks: {
+            color: '#8b949e',
+            callback: v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }),
+            maxTicksLimit: 6,
+          },
+          grid: { drawOnChartArea: false },
+        },
+      },
+    },
+    plugins: [mvrvZonesPlugin],
+  })
+
+  return { mvrv: lastMvrv, phase: lastPhase.label, color: lastPhase.color }
+}
+
+// ─── Realized P/L (aproximado por faixa etária) ───────────────────────────────
+
+interface OHLCVRow { time: number; close: number; volume: number }
+
+async function fetchBtcDailyOHLCV(limit: number): Promise<OHLCVRow[]> {
+  // Binance daily candles — mesma fonte já usada no Liquidation Heatmap, sem problemas de CORS
+  const candles = await fetchCandles('BTCUSDT', '1d', Math.min(limit, 1000))
+  return candles.map(c => ({ time: c.time, close: c.close, volume: c.volume }))
+}
+
+function rollingMean(arr: number[], n: number): number[] {
+  return arr.map((_, i) => {
+    if (i < n - 1) return NaN
+    let s = 0; for (let k = i - n + 1; k <= i; k++) s += arr[k]
+    return s / n
+  })
+}
+
+let rplChart: Chart | null = null
+
+// Bandas: fração de volume × (preço atual - SMA do período) = P/L estimado em USD
+const RPL_BANDS = [
+  { label: '< 1 sem',       smaLen:   7, frac: 0.28, colorPos: '#f8514999', colorNeg: '#f8514977' },
+  { label: '1 sem – 1 mês', smaLen:  30, frac: 0.25, colorPos: '#e6855a99', colorNeg: '#e6855a77' },
+  { label: '1 – 3 meses',   smaLen:  90, frac: 0.22, colorPos: '#e6b45099', colorNeg: '#e6b45077' },
+  { label: '3 meses – 1a',  smaLen: 200, frac: 0.15, colorPos: '#3fb95099', colorNeg: '#3fb95077' },
+  { label: '> 1 ano',       smaLen: 365, frac: 0.10, colorPos: '#36d39999', colorNeg: '#36d39977' },
+] as const
+
+export async function renderRealizedPL(
+  canvas: HTMLCanvasElement,
+  days = 365,
+): Promise<void> {
+  const limit = Math.min(days + 400, 2000)  // extra history for longer SMAs
+  const rows  = await fetchBtcDailyOHLCV(limit)
+  if (rows.length < 50) throw new Error('Dados insuficientes')
+
+  const closes = rows.map(d => d.close)
+  const vols   = rows.map(d => d.volume)
+
+  // Pre-compute all SMAs
+  const smas = RPL_BANDS.map(b => rollingMean(closes, b.smaLen))
+
+  // Slice to requested days
+  const start = Math.max(rows.length - days, 0)
+  const slicedRows  = rows.slice(start)
+  const slicedVols  = vols.slice(start)
+  const slicedSmas  = smas.map(s => s.slice(start))
+  const slicedClose = closes.slice(start)
+
+  const labels = slicedRows.map(d =>
+    new Date(d.time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+  )
+
+  const SCALE = 1e9  // → bilhões USD
+
+  const bandDatasets = RPL_BANDS.map((band, bi) => {
+    const smaSlice = slicedSmas[bi]
+    const data = slicedClose.map((p, i) =>
+      isNaN(smaSlice[i]) ? NaN : parseFloat(((p - smaSlice[i]) * slicedVols[i] * band.frac / SCALE).toFixed(4))
+    )
+    return {
+      type:            'bar' as const,
+      label:           band.label,
+      data,
+      backgroundColor: data.map(v => ((v ?? 0) >= 0 ? band.colorPos : band.colorNeg)),
+      borderWidth:     0,
+      stack:           'rpl',
+      yAxisID:         'yPL',
+      order:           RPL_BANDS.length - bi,
+      barPercentage:   1.0,
+      categoryPercentage: 1.0,
+    }
+  })
+
+  rplChart = destroy(rplChart)
+  rplChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        ...bandDatasets,
+        {
+          type:        'line' as const,
+          label:       'Preço BTC',
+          data:        slicedClose,
+          borderColor: '#e6edf355',
+          borderWidth: 1.5,
+          fill:        false,
+          tension:     0.2,
+          pointRadius: 0,
+          yAxisID:     'yPrice',
+          order:       0,
+          spanGaps:    true,
+        },
+      ],
+    },
+    options: {
+      responsive:          true,
+      maintainAspectRatio: false,
+      animation:           false,
+      interaction:         { mode: 'index' as const, intersect: false },
+      plugins: {
+        legend: {
+          display:  true,
+          position: 'top' as const,
+          labels:   { color: '#8b949e', font: { size: 11 }, boxWidth: 12, padding: 14 },
+        },
+        tooltip: {
+          backgroundColor: '#1c2128',
+          borderColor:     '#30363d',
+          borderWidth:     1,
+          titleColor:      '#8b949e',
+          bodyColor:       '#e6edf3',
+          padding:         10,
+          filter:          item => item.parsed.y !== 0 && !isNaN(item.parsed.y ?? NaN),
+          callbacks: {
+            title: items => items[0]?.label ?? '',
+            label: ctx => {
+              if (ctx.dataset.label === 'Preço BTC') {
+                const p = ctx.parsed.y ?? 0
+                return `BTC: $${p.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+              }
+              const v = ctx.parsed.y ?? 0
+              const sign = v >= 0 ? '+' : ''
+              return `${ctx.dataset.label}: ${sign}$${v.toFixed(3)}B`
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ...XAXIS,
+          stacked: true,
+          ticks: { ...XAXIS.ticks, maxTicksLimit: 10 },
+        },
+        yPL: {
+          position: 'left' as const,
+          stacked:  true,
+          ticks: {
+            color:    '#8b949e',
+            callback: v => {
+              const n = Number(v)
+              return (n >= 0 ? '+' : '') + '$' + Math.abs(n).toFixed(1) + 'B'
+            },
+          },
+          grid: {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            color: (ctx: any) => ctx.tick.value === 0 ? '#ffffff44' : GRID,
+          },
+        },
+        yPrice: {
+          position: 'right' as const,
+          type:     'logarithmic' as const,
+          ticks: {
+            color:        '#8b949e',
+            maxTicksLimit: 5,
+            callback:     v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }),
+          },
+          grid: { drawOnChartArea: false },
+        },
+      },
+    },
+  })
 }
 
 /** Atualiza os últimos pontos de BTC/ETH/SOL com preços ao vivo */
