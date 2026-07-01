@@ -6,6 +6,18 @@ import { connectTickerWS, startMonPolling } from './binance'
 import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom, renderBullBearTide, updateBullBearRange, renderNuplLth, renderMvrvRatio, renderRealizedPL } from './charts'
 import { createTradingChart, loadTradingChart, tickTradingChart } from './tradingChart'
 import { renderLiquidationHeatmap } from './heatmap'
+import { isAuthenticated, logout } from './auth'
+import { mountLoginPage } from './login'
+
+// ─── Auth guard ───────────────────────────────────────────────────────────────
+
+if (!isAuthenticated()) {
+  mountLoginPage()
+} else {
+  startDashboard()
+}
+
+function startDashboard() {
 
 // ─── HTML ─────────────────────────────────────────────────────────────────────
 
@@ -17,6 +29,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <span id="status">Conectando...</span>
     <span class="badge pyth">PYTH ORACLE · SSE</span>
     <span class="badge binance">BINANCE WS</span>
+    <button id="btn-logout" class="btn-logout">Sair</button>
   </div>
 
   <!-- Cards de oráculos: BTC / ETH / SOL -->
@@ -728,3 +741,12 @@ $('rpl-range-controls').addEventListener('click', e => {
 
 setTimeout(loadRealizedPL, 12000)
 setInterval(loadRealizedPL, 6 * 60 * 60 * 1000)
+
+// ─── Logout ────────────────────────────────────────────────────────────────────
+
+$('btn-logout').addEventListener('click', () => {
+  logout()
+  location.reload()
+})
+
+} // end startDashboard
