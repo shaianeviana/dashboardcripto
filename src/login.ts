@@ -5,7 +5,7 @@ export function mountLoginPage(): void {
     <div class="login-bg">
       <div class="login-card">
         <div class="login-logo">₿</div>
-        <h2 class="login-title">Crypto Dashboard</h2>
+        <h2 class="login-title">Sproutboard Crypto</h2>
         <p class="login-sub">Acesso restrito — faça login para continuar</p>
         <form id="login-form" autocomplete="off" novalidate>
           <div class="login-field">

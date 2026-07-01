@@ -764,19 +764,19 @@ let cmRowsCache: CMRow[] | null = null
 async function fetchNuplRows(): Promise<CMRow[]> {
   if (cmRowsCache) return cmRowsCache
 
-  const BASE = 'https://api.coinmetrics.io/v4/timeseries/asset-metrics' +
-               '?assets=btc&metrics=CapMrktCurUSD,CapRealUSD,PriceUSD&frequency=1d&page_size=5000'
+  // community-api é pública (sem chave); api.coinmetrics.io exige auth (401)
+  const COMMUNITY = 'https://community-api.coinmetrics.io/v4/timeseries/asset-metrics' +
+                    '?assets=btc&metrics=CapMrktCurUSD,CapRealUSD,PriceUSD&frequency=1d&page_size=5000'
   const SRCS = [
-    BASE,
-    'https://community-api.coinmetrics.io/v4/timeseries/asset-metrics' +
-      '?assets=btc&metrics=CapMrktCurUSD,CapRealUSD,PriceUSD&frequency=1d&page_size=5000',
-    'https://api.allorigins.win/raw?url=' + encodeURIComponent(BASE),
-    'https://corsproxy.io/?' + encodeURIComponent(BASE),
+    COMMUNITY,
+    'https://api.allorigins.win/raw?url='  + encodeURIComponent(COMMUNITY),
+    'https://corsproxy.io/?'               + encodeURIComponent(COMMUNITY),
+    'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(COMMUNITY),
   ]
 
   for (const url of SRCS) {
     try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+      const r = await fetch(url, { signal: AbortSignal.timeout(18_000) })
       if (!r.ok) continue
       const j: { data?: CMRow[] } = await r.json()
       const rows = (j.data ?? []).filter(d => d.CapMrktCurUSD && d.CapRealUSD)

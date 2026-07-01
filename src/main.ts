@@ -22,7 +22,7 @@ function startDashboard() {
 // ─── HTML ─────────────────────────────────────────────────────────────────────
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <h1>Crypto Dashboard — ao vivo</h1>
+  <h1>Sproutboard Crypto — ao vivo</h1>
 
   <div class="status-bar">
     <div class="dot" id="dot"></div>

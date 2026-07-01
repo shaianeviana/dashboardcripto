@@ -51,47 +51,47 @@ const get = (url: string) =>
   })
 
 export async function fetchMonPrice(): Promise<number> {
-  // 1) Binance
-  try {
-    const d = await get(`${REST}/ticker/price?symbol=MONUSDT`)
-    if (d?.price) return parseFloat(d.price)
-  } catch { /* segue */ }
-
-  // 2) Bybit
+  // 1) Bybit (MON listada aqui; Binance retorna 400 para MONUSDT)
   try {
     const d = await get('https://api.bybit.com/v5/market/tickers?category=spot&symbol=MONUSDT')
     const price = d?.result?.list?.[0]?.lastPrice
     if (price) return parseFloat(price)
   } catch { /* segue */ }
 
-  // 3) OKX
+  // 2) OKX
   try {
     const d = await get('https://www.okx.com/api/v5/market/ticker?instId=MON-USDT')
     const price = d?.data?.[0]?.last
     if (price) return parseFloat(price)
   } catch { /* segue */ }
 
-  // 4) MEXC
+  // 3) MEXC
   try {
     const d = await get('https://api.mexc.com/api/v3/ticker/price?symbol=MONUSDT')
     if (d?.price) return parseFloat(d.price)
   } catch { /* segue */ }
 
-  // 5) Gate.io
+  // 4) Gate.io
   try {
     const d: { last?: string }[] = await get('https://api.gateio.ws/api/v4/spot/tickers?currency_pair=MON_USDT')
     const price = d?.[0]?.last
     if (price) return parseFloat(price)
   } catch { /* segue */ }
 
-  // 6) KuCoin
+  // 5) KuCoin
   try {
     const d = await get('https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=MON-USDT')
     const price = d?.data?.price
     if (price) return parseFloat(price)
   } catch { /* segue */ }
 
-  throw new Error('MON não encontrado em nenhuma exchange')
+  // 6) Binance como último recurso (400 esperado, mas tenta mesmo assim)
+  try {
+    const d = await get(`${REST}/ticker/price?symbol=MONUSDT`)
+    if (d?.price) return parseFloat(d.price)
+  } catch { /* segue */ }
+
+  throw new Error('MON indisponível em todas as exchanges')
 }
 
 /** Polling contínuo do preço de MON */
