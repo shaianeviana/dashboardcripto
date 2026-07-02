@@ -6,7 +6,7 @@
 
 import { writeFile } from 'node:fs/promises'
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY?.trim()
 if (!ANTHROPIC_API_KEY) {
   console.error('ANTHROPIC_API_KEY não definida — abortando.')
   process.exit(1)
