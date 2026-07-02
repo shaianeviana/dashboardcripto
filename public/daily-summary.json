@@ -1,5 +1,5 @@
 {
-  "generatedAt": null,
-  "sentiment": "neutro",
-  "summary": "Resumo diário ainda não gerado — configure o ANTHROPIC_API_KEY nos secrets do repositório e rode a GitHub Action \"Daily market summary\"."
+  "generatedAt": "2026-07-02T17:26:32.729Z",
+  "sentiment": "positivo",
+  "summary": "O mercado cripto fechou o dia em alta, com Bitcoin (+2.86%), Ethereum (+5.05%) e Solana (+4.48%) ganhando força apesar do Índice de Medo e Ganância em extremo medo (19). A recuperação é impulsionada principalmente pela expansão institucional em DeFi e tokenização de ativos reais - Ondo Finance lançou modelo alinhado à SEC com ETFs da BlackRock e ações Micron, enquanto eToro investe em derivativos onchain, sinalizando que grandes players enxergam oportunidade mesmo em cenário avesso ao risco. Paralelamente, a análise de analistas sobre o selloff do STRC sugerindo proximidade do fundo do ciclo, combinada com ações regulatórias discretas do Fed (sem movimentos dovish ou hawkish explosivos), mantém o sentimento cautelosamente otimista em nível de instituições. O medo extremo entre varejistas contrasta com a confiança institucional, criando uma dinâmica típica de acumulação em mercados deprimidos."
 }
