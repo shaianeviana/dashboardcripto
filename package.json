@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "summary": "node scripts/generate-summary.mjs"
   },
   "devDependencies": {
     "typescript": "^5.4.5",

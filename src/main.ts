@@ -24,6 +24,10 @@ function startDashboard() {
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <h1>Sproutboard Crypto — ao vivo</h1>
 
+  <div class="daily-summary" id="daily-summary">
+    <div class="ds-loading">Carregando resumo do dia...</div>
+  </div>
+
   <div class="status-bar">
     <div class="dot" id="dot"></div>
     <span id="status">Conectando...</span>
@@ -276,6 +280,49 @@ const volBtcEl = $('s-vol-btc')
 function fmt(n: number, decimals = 2): string {
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
 }
+
+// ─── Resumo diário (gerado por IA 1x/dia via GitHub Action) ─────────────────
+
+interface DailySummary {
+  generatedAt: string | null
+  sentiment:   'positivo' | 'negativo' | 'neutro'
+  summary:     string
+}
+
+const SENTIMENT_COLOR: Record<DailySummary['sentiment'], string> = {
+  positivo: '#3fb950',
+  negativo: '#f85149',
+  neutro:   '#8b949e',
+}
+
+async function loadDailySummary() {
+  const wrap = $('daily-summary') as HTMLElement
+  try {
+    const r = await fetch('/daily-summary.json', { cache: 'no-store' })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const data: DailySummary = await r.json()
+
+    const color = SENTIMENT_COLOR[data.sentiment] ?? SENTIMENT_COLOR.neutro
+    const dateLabel = data.generatedAt
+      ? new Date(data.generatedAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      : null
+
+    wrap.innerHTML = `
+      <div class="ds-dot"></div>
+      <div class="ds-body">
+        <p class="ds-text"></p>
+        ${dateLabel ? '<span class="ds-meta"></span>' : ''}
+      </div>
+    `
+    ;(wrap.querySelector('.ds-dot') as HTMLElement).style.background = color
+    wrap.querySelector('.ds-text')!.textContent = data.summary
+    if (dateLabel) wrap.querySelector('.ds-meta')!.textContent = `Atualizado em ${dateLabel} · resumo gerado por IA`
+  } catch {
+    wrap.innerHTML = '<div class="ds-body"><p class="ds-text ds-muted">Resumo diário indisponível no momento.</p></div>'
+  }
+}
+
+loadDailySummary()
 
 // ─── Pyth multi-feed: BTC + ETH + SOL ────────────────────────────────────────
 
@@ -686,7 +733,7 @@ async function loadMvrvRatio() {
   }
 }
 
-setTimeout(loadMvrvRatio, 8500)
+setTimeout(loadMvrvRatio, 7200)
 setInterval(loadMvrvRatio, 12 * 60 * 60 * 1000)
 
 // ─── Liquidation Heatmap ───────────────────────────────────────────────────────

@@ -759,11 +759,10 @@ interface CMRow {
   PriceUSD?:      string | null
 }
 
-let cmRowsCache: CMRow[] | null = null
+let cmRowsCache:   CMRow[] | null           = null
+let cmRowsPromise: Promise<CMRow[]> | null  = null
 
-async function fetchNuplRows(): Promise<CMRow[]> {
-  if (cmRowsCache) return cmRowsCache
-
+async function fetchNuplRowsUncached(): Promise<CMRow[]> {
   // community-api é pública (sem chave); api.coinmetrics.io exige auth (401)
   const COMMUNITY = 'https://community-api.coinmetrics.io/v4/timeseries/asset-metrics' +
                     '?assets=btc&metrics=CapMrktCurUSD,CapRealUSD,PriceUSD&frequency=1d&page_size=5000'
@@ -780,10 +779,23 @@ async function fetchNuplRows(): Promise<CMRow[]> {
       if (!r.ok) continue
       const j: { data?: CMRow[] } = await r.json()
       const rows = (j.data ?? []).filter(d => d.CapMrktCurUSD && d.CapRealUSD)
-      if (rows.length >= 100) { cmRowsCache = rows; return rows }
+      if (rows.length >= 100) return rows
     } catch { /* próximo */ }
   }
   return []
+}
+
+// NUPL e MVRV consomem a mesma série; sem esse cache de promise em andamento,
+// a segunda chamada (disparada poucos segundos depois) refaz toda a cadeia de
+// fetch + proxies de fallback em paralelo, dobrando o tempo de carregamento.
+async function fetchNuplRows(): Promise<CMRow[]> {
+  if (cmRowsCache) return cmRowsCache
+  if (!cmRowsPromise) {
+    cmRowsPromise = fetchNuplRowsUncached().finally(() => { cmRowsPromise = null })
+  }
+  const rows = await cmRowsPromise
+  if (rows.length >= 100) cmRowsCache = rows
+  return rows
 }
 
 export async function renderNuplLth(canvas: HTMLCanvasElement): Promise<NuplResult> {

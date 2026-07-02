@@ -1,0 +1,5 @@
+{
+  "generatedAt": null,
+  "sentiment": "neutro",
+  "summary": "Resumo diário ainda não gerado — configure o ANTHROPIC_API_KEY nos secrets do repositório e rode a GitHub Action \"Daily market summary\"."
+}
