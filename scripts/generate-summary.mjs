@@ -6,7 +6,10 @@
 
 import { writeFile } from 'node:fs/promises'
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY?.trim()
+// chaves de API nunca contêm espaços/quebras de linha; remover tudo isso
+// protege contra secrets colados com quebra de linha embutida (ex: copiado
+// de uma fonte com word-wrap, como um PDF ou página web)
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY?.replace(/\s+/g, '')
 if (!ANTHROPIC_API_KEY) {
   console.error('ANTHROPIC_API_KEY não definida — abortando.')
   process.exit(1)
