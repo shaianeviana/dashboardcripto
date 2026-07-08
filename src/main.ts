@@ -3,7 +3,7 @@ import { Chart } from 'chart.js'
 import type { PythPrice, TickerStats } from './types'
 import { streamPyth } from './pyth'
 import { connectTickerWS, startMonPolling } from './binance'
-import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom, renderBullBearTide, updateBullBearRange, renderNuplLth, renderMvrvRatio, renderRealizedPL } from './charts'
+import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom, renderBullBearTide, updateBullBearRange, renderNuplLth, renderMvrvRatio, renderRealizedPL, renderDrawdownRisk, renderOilPrice } from './charts'
 import { createTradingChart, loadTradingChart, tickTradingChart } from './tradingChart'
 import { renderLiquidationHeatmap } from './heatmap'
 import { isAuthenticated, logout } from './auth'
@@ -23,6 +23,7 @@ function startDashboard() {
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <h1>Sproutboard Crypto — ao vivo</h1>
+  <p class="chart-sub" style="margin-top:-8px;">Nos gráficos: passe o mouse para ver valores · scroll/pinça para zoom · arraste para navegar · duplo-clique para resetar</p>
 
   <div class="daily-summary" id="daily-summary">
     <div class="ds-loading">Carregando resumo do dia...</div>
@@ -255,6 +256,30 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <div class="chart-wrap" id="rpl-wrap" style="height:460px"><canvas id="rpl-canvas"></canvas></div>
+
+  <h2>Drawdown Risk</h2>
+  <p class="chart-sub">Aproximação via MVRV Z-Score (suavizado, percentil histórico 0–100) · não é o indicador "Drawdown Risk V3" original · verde = risco baixo, vermelho = risco alto de correção</p>
+
+  <div class="nupl-card">
+    <div class="nupl-main-col">
+      <div class="nupl-phase" id="risk-phase">—</div>
+      <div class="nupl-sublabel">Fase atual</div>
+      <div class="nupl-value" id="risk-value" style="margin-top:10px;">—</div>
+      <div class="nupl-sublabel">Risco (0–100)</div>
+    </div>
+    <div class="nupl-legend">
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#3fb950"></span>Risco baixo (&lt; 60)</div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#e6b450"></span>Risco moderado (60 – 85)</div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#f85149"></span>Risco alto (&gt; 85)</div>
+    </div>
+  </div>
+
+  <div class="chart-wrap" id="risk-wrap"><canvas id="risk-canvas"></canvas></div>
+
+  <h2>Preço do Petróleo (Brent)</h2>
+  <p class="chart-sub">Cotação spot do Brent (referência global) · últimos 12 meses · dados Pyth Network</p>
+
+  <div class="chart-wrap" id="oil-wrap"><canvas id="oil-canvas"></canvas></div>
 
   <footer class="footer">
     Created by <a href="https://x.com/shaianeviana" target="_blank" rel="noopener">shaianeviana</a>
@@ -788,6 +813,45 @@ $('rpl-range-controls').addEventListener('click', e => {
 
 setTimeout(loadRealizedPL, 12000)
 setInterval(loadRealizedPL, 6 * 60 * 60 * 1000)
+
+// ─── Drawdown Risk ─────────────────────────────────────────────────────────────
+
+async function loadDrawdownRisk() {
+  const wrap = $('risk-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="risk-canvas"></canvas>'
+  try {
+    const canvas = $('risk-canvas') as HTMLCanvasElement
+    const { risk, phase, color } = await renderDrawdownRisk(canvas)
+
+    const phaseEl = $('risk-phase') as HTMLElement
+    phaseEl.textContent = phase
+    phaseEl.style.color = color
+
+    const valueEl = $('risk-value') as HTMLElement
+    valueEl.textContent = risk.toFixed(1)
+    valueEl.style.color = color
+  } catch (e) {
+    chartError('risk-wrap', 'Erro Drawdown Risk: ' + (e as Error).message)
+  }
+}
+
+setTimeout(loadDrawdownRisk, 13500)
+setInterval(loadDrawdownRisk, 12 * 60 * 60 * 1000)
+
+// ─── Preço do Petróleo (Brent) ───────────────────────────────────────────────────
+
+async function loadOilPrice() {
+  const wrap = $('oil-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="oil-canvas"></canvas>'
+  try {
+    await renderOilPrice($('oil-canvas') as HTMLCanvasElement)
+  } catch (e) {
+    chartError('oil-wrap', 'Erro Preço do Petróleo: ' + (e as Error).message)
+  }
+}
+
+setTimeout(loadOilPrice, 15000)
+setInterval(loadOilPrice, 12 * 60 * 60 * 1000)
 
 // ─── Logout ────────────────────────────────────────────────────────────────────
 

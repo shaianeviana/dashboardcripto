@@ -25,9 +25,26 @@ const GRID  = '#21262d'
 const XAXIS = { ticks: { color: '#8b949e' as const }, grid: { color: GRID } }
 const YAXIS = { ticks: { color: '#8b949e' as const }, grid: { color: GRID } }
 
+// Pan (arrastar) + zoom (scroll/pinça) no eixo X, com limite mínimo de 5 pontos visíveis.
+const ZOOM_OPTS = {
+  pan:  { enabled: true, mode: 'x' as const, threshold: 5 },
+  zoom: {
+    wheel: { enabled: true },
+    pinch: { enabled: true },
+    mode:  'x' as const,
+  },
+  limits: { x: { minRange: 5 } },
+}
+
 function destroy(ref: Chart | null): null {
   ref?.destroy()
   return null
+}
+
+/** Duplo-clique no gráfico reseta o zoom/pan (chartjs-plugin-zoom não tem gesto padrão). */
+function enableZoomReset(chart: Chart): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  chart.canvas.ondblclick = () => (chart as any).resetZoom()
 }
 
 function dateFmt(ts: number, showTime: boolean): string {
@@ -183,7 +200,23 @@ export async function renderPriceChart(canvas: HTMLCanvasElement, days: number):
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      plugins: { legend: { display: false } },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1c2128',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          padding: 10,
+          callbacks: {
+            label: ctx => `BTC: $${(ctx.parsed.y ?? 0).toLocaleString('en-US')}`,
+          },
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
+      },
       scales: {
         x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 8 } },
         y: { ...YAXIS, ticks: { ...YAXIS.ticks, callback: v => '$' + Number(v).toLocaleString('en-US') } },
@@ -191,6 +224,7 @@ export async function renderPriceChart(canvas: HTMLCanvasElement, days: number):
     },
     plugins: [lastPricePlugin],
   })
+  enableZoomReset(priceChart)
 }
 
 /** Atualiza o último candle do gráfico de preço com o preço ao vivo */
@@ -247,9 +281,12 @@ export async function renderCyclesChart(canvas: HTMLCanvasElement): Promise<void
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
+      interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { labels: { color: '#e6edf3' } },
         tooltip: { callbacks: { label: c => c.dataset.label!.split(' (')[0] + ': $' + (c.parsed.y ?? 0).toFixed(1) + 'k' } },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
       },
       scales: {
         x: XAXIS,
@@ -258,6 +295,7 @@ export async function renderCyclesChart(canvas: HTMLCanvasElement): Promise<void
     },
     plugins: [liveDotsPlugin],
   })
+  enableZoomReset(cyclesChart)
 }
 
 /** Atualiza o último ponto do ciclo atual com o preço ao vivo (em k$) */
@@ -450,15 +488,7 @@ export async function renderBtcMonChart(canvas: HTMLCanvasElement): Promise<void
           },
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        zoom: {
-          pan:  { enabled: true,  mode: 'x', threshold: 5 },
-          zoom: {
-            wheel:  { enabled: true },
-            pinch:  { enabled: true },
-            mode:   'x',
-          },
-          limits: { x: { minRange: 5 } },
-        },
+        zoom: ZOOM_OPTS as any,
       },
       scales: {
         x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
@@ -467,6 +497,7 @@ export async function renderBtcMonChart(canvas: HTMLCanvasElement): Promise<void
     },
     plugins: [liveDotsPlugin],
   })
+  enableZoomReset(compChart)
 }
 
 /** Reseta o zoom do gráfico de comparação */
@@ -655,6 +686,8 @@ export async function renderBullBearTide(
             },
           },
         },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
       },
       scales: {
         x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
@@ -674,6 +707,7 @@ export async function renderBullBearTide(
       },
     },
   })
+  enableZoomReset(bullBearTideChart)
 
   const last = v.deviations.length - 1
   return {
@@ -904,6 +938,8 @@ export async function renderNuplLth(canvas: HTMLCanvasElement): Promise<NuplResu
             },
           },
         },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
       },
       scales: {
         x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
@@ -926,6 +962,7 @@ export async function renderNuplLth(canvas: HTMLCanvasElement): Promise<NuplResu
     },
     plugins: [nuplZonesPlugin],
   })
+  enableZoomReset(nuplChart)
 
   return { nupl: lastNupl, phase: lastPhase.label, color: lastPhase.color }
 }
@@ -1100,6 +1137,8 @@ export async function renderMvrvRatio(canvas: HTMLCanvasElement): Promise<MvrvRe
             },
           },
         },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
       },
       scales: {
         x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
@@ -1123,8 +1162,234 @@ export async function renderMvrvRatio(canvas: HTMLCanvasElement): Promise<MvrvRe
     },
     plugins: [mvrvZonesPlugin],
   })
+  enableZoomReset(mvrvChart)
 
   return { mvrv: lastMvrv, phase: lastPhase.label, color: lastPhase.color }
+}
+
+// ─── Drawdown Risk (aproximação via MVRV Z-Score) ─────────────────────────────
+// Não é o indicador proprietário "Drawdown Risk V3" (Wantage Node/TradingView) —
+// aproximação própria: MVRV Z-Score suavizado, convertido em percentil histórico
+// (0-100). Maioria dos dias fica "grudada" nas faixas baixas (mercado normal) e
+// só sobe pra zona de risco nas raras janelas de euforia — mesmo formato visual
+// de platô do original, mas com dados reais de CoinMetrics.
+
+export interface DrawdownRiskResult {
+  risk:  number
+  phase: string
+  color: string
+}
+
+let riskChart: Chart | null = null
+
+const RISK_PHASES = [
+  { min: -Infinity, label: 'Risco baixo',    color: '#3fb950' },
+  { min: 60,         label: 'Risco moderado', color: '#e6b450' },
+  { min: 85,         label: 'Risco alto',     color: '#f85149' },
+] as const
+
+function riskPhaseInfo(v: number): { label: string; color: string } {
+  for (let i = RISK_PHASES.length - 1; i >= 0; i--) {
+    if (v >= RISK_PHASES[i].min) return RISK_PHASES[i]
+  }
+  return RISK_PHASES[0]
+}
+
+const riskZonesPlugin = {
+  id: 'riskZones',
+  beforeDatasetsDraw(chart: Chart) {
+    const { ctx, chartArea, scales } = chart
+    const y = scales['yRisk']
+    if (!chartArea || !y) return
+
+    const zones = [
+      { from: 0,  to: 60,  fill: '#3fb95014' },
+      { from: 60, to: 85,  fill: '#e6b45014' },
+      { from: 85, to: 100, fill: '#f8514914' },
+    ]
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(chartArea.left, chartArea.top, chartArea.width, chartArea.height)
+    ctx.clip()
+
+    for (const zone of zones) {
+      const top    = y.getPixelForValue(zone.to)
+      const bottom = y.getPixelForValue(zone.from)
+      ctx.fillStyle = zone.fill
+      ctx.fillRect(chartArea.left, top, chartArea.width, bottom - top)
+    }
+
+    ctx.restore()
+  },
+}
+
+/** Suaviza ruído diário antes do ranking — reduz o serrilhado da linha */
+function smooth(vals: number[], window: number): number[] {
+  return vals.map((_, i) => {
+    const from = Math.max(0, i - window + 1)
+    const slice = vals.slice(from, i + 1).filter(v => Number.isFinite(v))
+    if (!slice.length) return NaN
+    return slice.reduce((s, v) => s + v, 0) / slice.length
+  })
+}
+
+/** Converte cada valor no seu percentil histórico (0-100) — a maioria dos dias
+ * historicamente "normais" fica grudada nas faixas baixas, só as raras leituras
+ * mais extremas (euforia) sobem para o topo da escala. */
+function percentileNormalize(vals: number[]): number[] {
+  const finite = vals.filter(v => Number.isFinite(v)).sort((a, b) => a - b)
+  if (!finite.length) return vals.map(() => NaN)
+  return vals.map(v => {
+    if (!Number.isFinite(v)) return NaN
+    let lo = 0, hi = finite.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (finite[mid] < v) lo = mid + 1; else hi = mid
+    }
+    return (lo / finite.length) * 100
+  })
+}
+
+export async function renderDrawdownRisk(canvas: HTMLCanvasElement): Promise<DrawdownRiskResult> {
+  let labels:    string[]
+  let zScores:   number[]
+  let priceVals: number[]
+
+  const cmRows = await fetchNuplRows()
+
+  if (cmRows.length >= 100) {
+    labels = cmRows.map(d =>
+      new Date(d.time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+    )
+    const mktVals  = cmRows.map(d => parseFloat(d.CapMrktCurUSD!))
+    const realVals = cmRows.map(d => parseFloat(d.CapRealUSD!))
+    priceVals = cmRows.map(d => (d.PriceUSD ? parseFloat(d.PriceUSD) : NaN))
+
+    const mean   = mktVals.reduce((s, v) => s + v, 0) / mktVals.length
+    const stdDev = Math.sqrt(mktVals.reduce((s, v) => s + (v - mean) ** 2, 0) / mktVals.length)
+
+    zScores = mktVals.map((m, i) => (stdDev > 0 ? (m - realVals[i]) / stdDev : NaN))
+  } else {
+    // fallback: z-score de (preço - SMA 200 semanas) sobre desvio-padrão do preço
+    const raw    = await fetchBtcHistory()
+    const prices = raw.map(d => d.price)
+    const WMA    = 1400
+
+    labels    = []
+    priceVals = []
+    const diffs: number[] = []
+
+    for (let i = WMA - 1; i < raw.length; i++) {
+      let sum = 0; for (let k = i - WMA + 1; k <= i; k++) sum += prices[k]
+      const wma = sum / WMA
+      labels.push(new Date(raw[i].time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }))
+      priceVals.push(prices[i])
+      diffs.push(prices[i] - wma)
+    }
+
+    const mean   = diffs.reduce((s, v) => s + v, 0) / diffs.length
+    const stdDev = Math.sqrt(diffs.reduce((s, v) => s + (v - mean) ** 2, 0) / diffs.length)
+    zScores = diffs.map(d => (stdDev > 0 ? d / stdDev : NaN))
+  }
+
+  if (zScores.length < 100) throw new Error('Dados insuficientes')
+
+  const riskVals  = percentileNormalize(smooth(zScores, 14))
+  const lastRisk  = riskVals[riskVals.length - 1]
+  const lastPhase = riskPhaseInfo(lastRisk)
+
+  riskChart = destroy(riskChart)
+  riskChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'line' as const,
+          label: 'Drawdown Risk',
+          data: riskVals,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          segment: { borderColor: (ctx: any) => riskPhaseInfo(riskVals[ctx.p1DataIndex] ?? 0).color } as never,
+          borderColor: lastPhase.color,
+          borderWidth: 1.8,
+          fill: false,
+          tension: 0.2,
+          pointRadius: 0,
+          yAxisID: 'yRisk',
+          order: 1,
+          spanGaps: true,
+        },
+        {
+          type: 'line' as const,
+          label: 'BTC Price',
+          data: priceVals,
+          borderColor: '#e6edf344',
+          borderWidth: 1,
+          fill: false,
+          tension: 0.15,
+          pointRadius: 0,
+          yAxisID: 'yPrice',
+          order: 2,
+          spanGaps: true,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index' as const, intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1c2128',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          padding: 10,
+          callbacks: {
+            title: items => items[0]?.label ?? '',
+            label: ctx => {
+              if (ctx.datasetIndex === 0) {
+                const v = ctx.parsed.y ?? 0
+                return `Risco: ${v.toFixed(1)} — ${riskPhaseInfo(v).label}`
+              }
+              const p = ctx.parsed.y ?? 0
+              return `BTC: $${p.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+            },
+          },
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
+      },
+      scales: {
+        x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
+        yRisk: {
+          position: 'left' as const,
+          min: 0,
+          max: 100,
+          ticks: { color: '#8b949e', callback: v => Number(v).toFixed(0) },
+          grid: { color: GRID },
+        },
+        yPrice: {
+          position: 'right' as const,
+          type: 'logarithmic' as const,
+          ticks: {
+            color: '#8b949e',
+            callback: v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }),
+            maxTicksLimit: 6,
+          },
+          grid: { drawOnChartArea: false },
+        },
+      },
+    },
+    plugins: [riskZonesPlugin],
+  })
+  enableZoomReset(riskChart)
+
+  return { risk: lastRisk, phase: lastPhase.label, color: lastPhase.color }
 }
 
 // ─── Realized P/L (aproximado por faixa etária) ───────────────────────────────
@@ -1256,6 +1521,8 @@ export async function renderRealizedPL(
             },
           },
         },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
       },
       scales: {
         x: {
@@ -1291,6 +1558,7 @@ export async function renderRealizedPL(
       },
     },
   })
+  enableZoomReset(rplChart)
 }
 
 /** Atualiza os últimos pontos de BTC/ETH/SOL com preços ao vivo */
@@ -1306,4 +1574,86 @@ export function tickComparisonChart(prices: Partial<Record<'BTC' | 'ETH' | 'SOL'
     }
   }
   if (updated) compChart.update('none')
+}
+
+// ─── Preço do Petróleo (Brent) ───────────────────────────────────────────────────
+// Fonte: Pyth Network Benchmarks (TradingView-compatible history shim),
+// feed "Commodities.UKOILSPOT" (Brent spot) — sem necessidade de proxy/CORS.
+
+interface OilRow { time: number; close: number }
+
+async function fetchOilHistory(days: number): Promise<OilRow[]> {
+  const to   = Math.floor(Date.now() / 1000)
+  const from = to - Math.min(days, 364) * 86400
+  const url  = `https://benchmarks.pyth.network/v1/shims/tradingview/history?symbol=Commodities.UKOILSPOT&resolution=D&from=${from}&to=${to}`
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+  if (!res.ok) throw new Error(`Pyth HTTP ${res.status}`)
+  const d: { s: string; t: number[]; c: number[] } = await res.json()
+  if (d.s !== 'ok' || !d.t?.length) throw new Error('Dados de petróleo indisponíveis')
+
+  return d.t.map((t, i) => ({ time: t * 1000, close: d.c[i] }))
+}
+
+let oilChart: Chart | null = null
+
+export async function renderOilPrice(canvas: HTMLCanvasElement): Promise<{ price: number }> {
+  const rows = await fetchOilHistory(365)
+
+  const labels = rows.map(r => dateFmt(r.time, false))
+  const prices = rows.map(r => r.close)
+  const lastPrice = prices[prices.length - 1]
+
+  oilChart = destroy(oilChart)
+  oilChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Brent (US$/barril)',
+          data: prices,
+          borderColor: '#e6b450',
+          backgroundColor: '#e6b45018',
+          fill: true,
+          tension: 0.2,
+          borderWidth: 1.8,
+          pointRadius: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1c2128',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          padding: 10,
+          callbacks: {
+            label: ctx => `Brent: $${(ctx.parsed.y ?? 0).toFixed(2)}`,
+          },
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
+      },
+      scales: {
+        x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
+        y: {
+          ...YAXIS,
+          ticks: { ...YAXIS.ticks, callback: v => '$' + Number(v).toFixed(0) },
+        },
+      },
+    },
+    plugins: [lastPricePlugin],
+  })
+  enableZoomReset(oilChart)
+
+  return { price: lastPrice }
 }
