@@ -3,7 +3,7 @@ import { Chart } from 'chart.js'
 import type { PythPrice, TickerStats } from './types'
 import { streamPyth } from './pyth'
 import { connectTickerWS, startMonPolling } from './binance'
-import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom, renderBullBearTide, updateBullBearRange, renderNuplLth, renderMvrvRatio, renderRealizedPL, renderDrawdownRisk, renderOilPrice } from './charts'
+import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom, renderBullBearTide, updateBullBearRange, renderNuplLth, renderMvrvRatio, renderRealizedPL, renderDrawdownRisk, renderOilPrice, renderTraderFlow } from './charts'
 import { createTradingChart, loadTradingChart, tickTradingChart } from './tradingChart'
 import { renderLiquidationHeatmap } from './heatmap'
 import { isAuthenticated, logout } from './auth'
@@ -280,6 +280,34 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <p class="chart-sub">Cotação spot do Brent (referência global) · últimos 12 meses · dados Pyth Network</p>
 
   <div class="chart-wrap" id="oil-wrap"><canvas id="oil-canvas"></canvas></div>
+
+  <h2>Trader Flow</h2>
+  <p class="chart-sub">Money Flow Index (14) sobre candles diários do BTC · aproximação do indicador "Trader Flow" · verde = zona de desconto, vermelho = zona de sobrecompra</p>
+
+  <div class="nupl-card">
+    <div class="nupl-main-col">
+      <div class="nupl-phase" id="flow-phase">—</div>
+      <div class="nupl-sublabel">Fase atual</div>
+      <div class="nupl-value" id="flow-value" style="margin-top:10px;">—</div>
+      <div class="nupl-sublabel">Trader Flow (0–100)</div>
+    </div>
+    <div class="nupl-legend">
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#3fb950"></span>Descontado <span id="flow-pct-low"></span></div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#e6edf3"></span>Neutro <span id="flow-pct-mid"></span></div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#f85149"></span>Sobrecomprado <span id="flow-pct-high"></span></div>
+    </div>
+  </div>
+
+  <div class="controls" id="flow-range-controls">
+    <button data-flow="30">30d</button>
+    <button data-flow="90">90d</button>
+    <button data-flow="180">180d</button>
+    <button data-flow="365">1a</button>
+    <button data-flow="1825">5a</button>
+    <button data-flow="all" class="active">All</button>
+  </div>
+
+  <div class="chart-wrap" id="flow-wrap"><canvas id="flow-canvas"></canvas></div>
 
   <footer class="footer">
     Created by <a href="https://x.com/shaianeviana" target="_blank" rel="noopener">shaianeviana</a>
@@ -852,6 +880,46 @@ async function loadOilPrice() {
 
 setTimeout(loadOilPrice, 15000)
 setInterval(loadOilPrice, 12 * 60 * 60 * 1000)
+
+// ─── Trader Flow (Money Flow Index) ───────────────────────────────────────────
+
+let flowDays: number | 'all' = 'all'
+
+async function loadTraderFlow() {
+  const wrap = $('flow-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="flow-canvas"></canvas>'
+  try {
+    const canvas = $('flow-canvas') as HTMLCanvasElement
+    const { value, phase, color, pctLow, pctMid, pctHigh } = await renderTraderFlow(canvas, flowDays)
+
+    const phaseEl = $('flow-phase') as HTMLElement
+    phaseEl.textContent = phase
+    phaseEl.style.color = color
+
+    const valueEl = $('flow-value') as HTMLElement
+    valueEl.textContent = value.toFixed(1)
+    valueEl.style.color = color
+
+    ;($('flow-pct-low')  as HTMLElement).textContent = `${pctLow.toFixed(1)}%`
+    ;($('flow-pct-mid')  as HTMLElement).textContent = `${pctMid.toFixed(1)}%`
+    ;($('flow-pct-high') as HTMLElement).textContent = `${pctHigh.toFixed(1)}%`
+  } catch (e) {
+    chartError('flow-wrap', 'Erro Trader Flow: ' + (e as Error).message)
+  }
+}
+
+$('flow-range-controls').addEventListener('click', e => {
+  const btn = (e.target as HTMLElement).closest('button[data-flow]') as HTMLButtonElement | null
+  if (!btn) return
+  document.querySelectorAll('#flow-range-controls button').forEach(b => b.classList.remove('active'))
+  btn.classList.add('active')
+  const raw = btn.dataset.flow!
+  flowDays = raw === 'all' ? 'all' : parseInt(raw, 10)
+  loadTraderFlow()
+})
+
+setTimeout(loadTraderFlow, 16500)
+setInterval(loadTraderFlow, 12 * 60 * 60 * 1000)
 
 // ─── Logout ────────────────────────────────────────────────────────────────────
 

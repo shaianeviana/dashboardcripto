@@ -14,7 +14,7 @@ import {
   Tooltip,
 } from 'chart.js'
 import zoomPlugin from 'chartjs-plugin-zoom'
-import type { Kline } from './types'
+import type { Kline, Candle } from './types'
 import { fetchKlines, fetchCandles } from './binance'
 
 Chart.register(LineController, LineElement, BarController, BarElement, PointElement, LinearScale, LogarithmicScale, CategoryScale, TimeScale, Filler, Legend, Tooltip, zoomPlugin)
@@ -1656,4 +1656,218 @@ export async function renderOilPrice(canvas: HTMLCanvasElement): Promise<{ price
   enableZoomReset(oilChart)
 
   return { price: lastPrice }
+}
+
+// ─── Trader Flow (Money Flow Index) ───────────────────────────────────────────
+// Aproximação do indicador "Trader Flow" (VantageNode) — Money Flow Index (14) sobre
+// candles diários do BTC: mede a pressão de compra/venda combinando preço típico e
+// volume. Verde = zona de desconto (sobrevenda), vermelho = zona de sobrecompra,
+// branco = neutro — mesma leitura visual do indicador original, com dados da Binance.
+
+export interface TraderFlowResult {
+  value:   number
+  phase:   string
+  color:   string
+  pctLow:  number
+  pctMid:  number
+  pctHigh: number
+}
+
+const FLOW_UPPER = 80
+const FLOW_LOWER = 20
+
+const FLOW_PHASES = [
+  { max: FLOW_LOWER, label: 'Descontado',    color: '#3fb950' },
+  { max: FLOW_UPPER,  label: 'Neutro',       color: '#e6edf3' },
+  { max: Infinity,    label: 'Sobrecomprado', color: '#f85149' },
+] as const
+
+function flowPhaseInfo(v: number): { label: string; color: string } {
+  for (const p of FLOW_PHASES) if (v <= p.max) return p
+  return FLOW_PHASES[FLOW_PHASES.length - 1]
+}
+
+/** Money Flow Index: RSI ponderado por volume, usando preço típico (H+L+C)/3 */
+function moneyFlowIndex(candles: Candle[], period = 14): number[] {
+  const n       = candles.length
+  const typical = candles.map(c => (c.high + c.low + c.close) / 3)
+  const rawFlow = typical.map((tp, i) => tp * candles[i].volume)
+
+  const mfi: number[] = new Array(n).fill(NaN)
+  for (let i = period; i < n; i++) {
+    let pos = 0, neg = 0
+    for (let k = i - period + 1; k <= i; k++) {
+      if (typical[k] > typical[k - 1]) pos += rawFlow[k]
+      else if (typical[k] < typical[k - 1]) neg += rawFlow[k]
+    }
+    mfi[i] = neg === 0 ? 100 : 100 - 100 / (1 + pos / neg)
+  }
+  return mfi
+}
+
+let flowChart: Chart | null = null
+
+const flowZonesPlugin = {
+  id: 'flowZones',
+  afterDraw(chart: Chart) {
+    const { ctx, chartArea, scales } = chart
+    const y = scales['yFlow']
+    if (!chartArea || !y) return
+
+    const lines = [
+      { value: FLOW_UPPER, color: '#f85149' },
+      { value: FLOW_LOWER, color: '#3fb950' },
+    ]
+
+    ctx.save()
+    ctx.setLineDash([5, 4])
+    ctx.lineWidth = 1
+    for (const line of lines) {
+      const py = y.getPixelForValue(line.value)
+      ctx.strokeStyle = line.color
+      ctx.beginPath()
+      ctx.moveTo(chartArea.left, py)
+      ctx.lineTo(chartArea.right, py)
+      ctx.stroke()
+    }
+    ctx.restore()
+  },
+}
+
+/** Busca candles diários do BTC, paginando quando o período pedido excede o limite
+ * de 1000 velas por requisição da Binance (necessário para 5a / All). */
+async function fetchBtcCandlesRange(days: number | 'all'): Promise<Candle[]> {
+  const WARMUP = 20  // folga para o warm-up do MFI (14 períodos)
+
+  if (days !== 'all' && days + WARMUP <= 1000) {
+    return fetchCandles('BTCUSDT', '1d', days + WARMUP)
+  }
+
+  const DAY_MS = 86_400_000
+  const all: Candle[] = []
+  let startTime = days === 'all'
+    ? new Date('2017-08-17').getTime()
+    : Date.now() - (days + WARMUP) * DAY_MS
+
+  while (startTime < Date.now()) {
+    const batch = await fetchCandles('BTCUSDT', '1d', 1000, startTime)
+    if (!batch.length) break
+    all.push(...batch)
+    if (batch.length < 1000) break
+    startTime = batch[batch.length - 1].time + DAY_MS
+  }
+  return all
+}
+
+export async function renderTraderFlow(canvas: HTMLCanvasElement, days: number | 'all' = 365): Promise<TraderFlowResult> {
+  const candles = await fetchBtcCandlesRange(days)
+  if (candles.length < 30) throw new Error('Dados insuficientes')
+
+  const mfiFull = moneyFlowIndex(candles, 14)
+
+  const start     = days === 'all' ? 14 : Math.max(candles.length - days, 0)
+  const rows      = candles.slice(start)
+  const flowVals  = mfiFull.slice(start)
+  const priceVals = rows.map(c => c.close)
+  const labels    = rows.map(c => new Date(c.time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }))
+
+  const lastFlow  = [...flowVals].reverse().find(Number.isFinite) ?? NaN
+  const lastPhase = flowPhaseInfo(lastFlow)
+
+  const finite  = flowVals.filter(Number.isFinite)
+  const pctLow  = finite.length ? (finite.filter(v => v <= FLOW_LOWER).length  / finite.length) * 100 : 0
+  const pctHigh = finite.length ? (finite.filter(v => v >= FLOW_UPPER).length  / finite.length) * 100 : 0
+  const pctMid  = Math.max(0, 100 - pctLow - pctHigh)
+
+  flowChart = destroy(flowChart)
+  flowChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'line' as const,
+          label: 'Trader Flow',
+          data: flowVals,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          segment: { borderColor: (ctx: any) => flowPhaseInfo(flowVals[ctx.p1DataIndex] ?? 50).color } as never,
+          borderColor: lastPhase.color,
+          borderWidth: 1.6,
+          fill: false,
+          tension: 0.25,
+          pointRadius: 0,
+          yAxisID: 'yFlow',
+          order: 1,
+          spanGaps: true,
+        },
+        {
+          type: 'line' as const,
+          label: 'BTC Price',
+          data: priceVals,
+          borderColor: '#e6edf333',
+          borderWidth: 1,
+          fill: false,
+          tension: 0.15,
+          pointRadius: 0,
+          yAxisID: 'yPrice',
+          order: 2,
+          spanGaps: true,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index' as const, intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1c2128',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          padding: 10,
+          callbacks: {
+            title: items => items[0]?.label ?? '',
+            label: ctx => {
+              if (ctx.datasetIndex === 0) {
+                const v = ctx.parsed.y ?? 0
+                return `Trader Flow: ${v.toFixed(1)} — ${flowPhaseInfo(v).label}`
+              }
+              const p = ctx.parsed.y ?? 0
+              return `BTC: $${p.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+            },
+          },
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
+      },
+      scales: {
+        x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
+        yFlow: {
+          position: 'left' as const,
+          min: 0,
+          max: 100,
+          ticks: { color: '#8b949e', callback: v => Number(v).toFixed(0) },
+          grid: { color: GRID },
+        },
+        yPrice: {
+          position: 'right' as const,
+          type: 'logarithmic' as const,
+          ticks: {
+            color: '#8b949e',
+            callback: v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }),
+            maxTicksLimit: 6,
+          },
+          grid: { drawOnChartArea: false },
+        },
+      },
+    },
+    plugins: [flowZonesPlugin],
+  })
+  enableZoomReset(flowChart)
+
+  return { value: lastFlow, phase: lastPhase.label, color: lastPhase.color, pctLow, pctMid, pctHigh }
 }

@@ -27,8 +27,10 @@ export async function fetchCandles(
   symbol: string,
   interval: string,
   limit: number,
+  startTime?: number,
 ): Promise<Candle[]> {
   const params = new URLSearchParams({ symbol, interval, limit: String(limit) })
+  if (startTime) params.set('startTime', String(startTime))
   const res = await fetch(`${REST}/klines?${params}`)
   if (!res.ok) throw new Error(`Binance candles ${symbol} HTTP ${res.status}`)
   const raw: [number, string, string, string, string, string][] = await res.json()
