@@ -273,8 +273,8 @@ export async function renderCyclesChart(canvas: HTMLCanvasElement): Promise<void
     data: {
       labels,
       datasets: [
-        { label: `Ciclo 2021/22 (topo $${(w1[i1].close / 1000).toFixed(0)}k)`, data: c1, borderColor: '#f85149', backgroundColor: '#f8514918', fill: true, tension: .3, borderWidth: 2, pointRadius: 0 },
-        { label: `Ciclo 2024/25 (topo $${(w2[i2].close / 1000).toFixed(0)}k)`, data: c2, borderColor: '#3fb950', backgroundColor: '#3fb95018', fill: true, tension: .3, borderWidth: 2, pointRadius: 0 },
+        { label: `Ciclo 2021/22 (topo $${(w1[i1].close / 1000).toFixed(0)}k)`, data: c1, borderColor: '#FE6AA4', backgroundColor: '#FE6AA418', fill: true, tension: .3, borderWidth: 2, pointRadius: 0 },
+        { label: `Ciclo 2024/25 (topo $${(w2[i2].close / 1000).toFixed(0)}k)`, data: c2, borderColor: '#79EDB0', backgroundColor: '#79EDB018', fill: true, tension: .3, borderWidth: 2, pointRadius: 0 },
       ],
     },
     options: {
@@ -590,7 +590,7 @@ function bbtSlice(cache: BbtCache, days: number | 'all'): BbtCache {
 export function updateBullBearRange(days: number | 'all'): void {
   if (!bbtCache || !bullBearTideChart) return
   const v  = bbtSlice(bbtCache, days)
-  const bg = v.deviations.map(d => d >= 0 ? '#3fb95088' : '#f8514988')
+  const bg = v.deviations.map(d => d >= 0 ? '#79EDB088' : '#FE6AA488')
 
   bullBearTideChart.data.labels                      = v.labels
   bullBearTideChart.data.datasets[0].data            = v.deviations
@@ -632,7 +632,7 @@ export async function renderBullBearTide(
   }
 
   const v  = bbtSlice(bbtCache, days)
-  const bg = v.deviations.map(d => d >= 0 ? '#3fb95088' : '#f8514988')
+  const bg = v.deviations.map(d => d >= 0 ? '#79EDB088' : '#FE6AA488')
 
   // ── Gráfico único: barras bull/bear (esq.) + linha de preço (dir.) ────────
   bullBearTideChart = destroy(bullBearTideChart)
@@ -1167,231 +1167,6 @@ export async function renderMvrvRatio(canvas: HTMLCanvasElement): Promise<MvrvRe
   return { mvrv: lastMvrv, phase: lastPhase.label, color: lastPhase.color }
 }
 
-// ─── Drawdown Risk (aproximação via MVRV Z-Score) ─────────────────────────────
-// Não é o indicador proprietário "Drawdown Risk V3" (Wantage Node/TradingView) —
-// aproximação própria: MVRV Z-Score suavizado, convertido em percentil histórico
-// (0-100). Maioria dos dias fica "grudada" nas faixas baixas (mercado normal) e
-// só sobe pra zona de risco nas raras janelas de euforia — mesmo formato visual
-// de platô do original, mas com dados reais de CoinMetrics.
-
-export interface DrawdownRiskResult {
-  risk:  number
-  phase: string
-  color: string
-}
-
-let riskChart: Chart | null = null
-
-const RISK_PHASES = [
-  { min: -Infinity, label: 'Risco baixo',    color: '#3fb950' },
-  { min: 60,         label: 'Risco moderado', color: '#e6b450' },
-  { min: 85,         label: 'Risco alto',     color: '#f85149' },
-] as const
-
-function riskPhaseInfo(v: number): { label: string; color: string } {
-  for (let i = RISK_PHASES.length - 1; i >= 0; i--) {
-    if (v >= RISK_PHASES[i].min) return RISK_PHASES[i]
-  }
-  return RISK_PHASES[0]
-}
-
-const riskZonesPlugin = {
-  id: 'riskZones',
-  beforeDatasetsDraw(chart: Chart) {
-    const { ctx, chartArea, scales } = chart
-    const y = scales['yRisk']
-    if (!chartArea || !y) return
-
-    const zones = [
-      { from: 0,  to: 60,  fill: '#3fb95014' },
-      { from: 60, to: 85,  fill: '#e6b45014' },
-      { from: 85, to: 100, fill: '#f8514914' },
-    ]
-
-    ctx.save()
-    ctx.beginPath()
-    ctx.rect(chartArea.left, chartArea.top, chartArea.width, chartArea.height)
-    ctx.clip()
-
-    for (const zone of zones) {
-      const top    = y.getPixelForValue(zone.to)
-      const bottom = y.getPixelForValue(zone.from)
-      ctx.fillStyle = zone.fill
-      ctx.fillRect(chartArea.left, top, chartArea.width, bottom - top)
-    }
-
-    ctx.restore()
-  },
-}
-
-/** Suaviza ruído diário antes do ranking — reduz o serrilhado da linha */
-function smooth(vals: number[], window: number): number[] {
-  return vals.map((_, i) => {
-    const from = Math.max(0, i - window + 1)
-    const slice = vals.slice(from, i + 1).filter(v => Number.isFinite(v))
-    if (!slice.length) return NaN
-    return slice.reduce((s, v) => s + v, 0) / slice.length
-  })
-}
-
-/** Converte cada valor no seu percentil histórico (0-100) — a maioria dos dias
- * historicamente "normais" fica grudada nas faixas baixas, só as raras leituras
- * mais extremas (euforia) sobem para o topo da escala. */
-function percentileNormalize(vals: number[]): number[] {
-  const finite = vals.filter(v => Number.isFinite(v)).sort((a, b) => a - b)
-  if (!finite.length) return vals.map(() => NaN)
-  return vals.map(v => {
-    if (!Number.isFinite(v)) return NaN
-    let lo = 0, hi = finite.length
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1
-      if (finite[mid] < v) lo = mid + 1; else hi = mid
-    }
-    return (lo / finite.length) * 100
-  })
-}
-
-export async function renderDrawdownRisk(canvas: HTMLCanvasElement): Promise<DrawdownRiskResult> {
-  let labels:    string[]
-  let zScores:   number[]
-  let priceVals: number[]
-
-  const cmRows = await fetchNuplRows()
-
-  if (cmRows.length >= 100) {
-    labels = cmRows.map(d =>
-      new Date(d.time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })
-    )
-    const mktVals  = cmRows.map(d => parseFloat(d.CapMrktCurUSD!))
-    const realVals = cmRows.map(d => parseFloat(d.CapRealUSD!))
-    priceVals = cmRows.map(d => (d.PriceUSD ? parseFloat(d.PriceUSD) : NaN))
-
-    const mean   = mktVals.reduce((s, v) => s + v, 0) / mktVals.length
-    const stdDev = Math.sqrt(mktVals.reduce((s, v) => s + (v - mean) ** 2, 0) / mktVals.length)
-
-    zScores = mktVals.map((m, i) => (stdDev > 0 ? (m - realVals[i]) / stdDev : NaN))
-  } else {
-    // fallback: z-score de (preço - SMA 200 semanas) sobre desvio-padrão do preço
-    const raw    = await fetchBtcHistory()
-    const prices = raw.map(d => d.price)
-    const WMA    = 1400
-
-    labels    = []
-    priceVals = []
-    const diffs: number[] = []
-
-    for (let i = WMA - 1; i < raw.length; i++) {
-      let sum = 0; for (let k = i - WMA + 1; k <= i; k++) sum += prices[k]
-      const wma = sum / WMA
-      labels.push(new Date(raw[i].time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }))
-      priceVals.push(prices[i])
-      diffs.push(prices[i] - wma)
-    }
-
-    const mean   = diffs.reduce((s, v) => s + v, 0) / diffs.length
-    const stdDev = Math.sqrt(diffs.reduce((s, v) => s + (v - mean) ** 2, 0) / diffs.length)
-    zScores = diffs.map(d => (stdDev > 0 ? d / stdDev : NaN))
-  }
-
-  if (zScores.length < 100) throw new Error('Dados insuficientes')
-
-  const riskVals  = percentileNormalize(smooth(zScores, 14))
-  const lastRisk  = riskVals[riskVals.length - 1]
-  const lastPhase = riskPhaseInfo(lastRisk)
-
-  riskChart = destroy(riskChart)
-  riskChart = new Chart(canvas, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          type: 'line' as const,
-          label: 'Drawdown Risk',
-          data: riskVals,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          segment: { borderColor: (ctx: any) => riskPhaseInfo(riskVals[ctx.p1DataIndex] ?? 0).color } as never,
-          borderColor: lastPhase.color,
-          borderWidth: 1.8,
-          fill: false,
-          tension: 0.2,
-          pointRadius: 0,
-          yAxisID: 'yRisk',
-          order: 1,
-          spanGaps: true,
-        },
-        {
-          type: 'line' as const,
-          label: 'BTC Price',
-          data: priceVals,
-          borderColor: '#e6edf344',
-          borderWidth: 1,
-          fill: false,
-          tension: 0.15,
-          pointRadius: 0,
-          yAxisID: 'yPrice',
-          order: 2,
-          spanGaps: true,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      interaction: { mode: 'index' as const, intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#1c2128',
-          borderColor: '#30363d',
-          borderWidth: 1,
-          titleColor: '#8b949e',
-          bodyColor: '#e6edf3',
-          padding: 10,
-          callbacks: {
-            title: items => items[0]?.label ?? '',
-            label: ctx => {
-              if (ctx.datasetIndex === 0) {
-                const v = ctx.parsed.y ?? 0
-                return `Risco: ${v.toFixed(1)} — ${riskPhaseInfo(v).label}`
-              }
-              const p = ctx.parsed.y ?? 0
-              return `BTC: $${p.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
-            },
-          },
-        },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        zoom: ZOOM_OPTS as any,
-      },
-      scales: {
-        x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
-        yRisk: {
-          position: 'left' as const,
-          min: 0,
-          max: 100,
-          ticks: { color: '#8b949e', callback: v => Number(v).toFixed(0) },
-          grid: { color: GRID },
-        },
-        yPrice: {
-          position: 'right' as const,
-          type: 'logarithmic' as const,
-          ticks: {
-            color: '#8b949e',
-            callback: v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }),
-            maxTicksLimit: 6,
-          },
-          grid: { drawOnChartArea: false },
-        },
-      },
-    },
-    plugins: [riskZonesPlugin],
-  })
-  enableZoomReset(riskChart)
-
-  return { risk: lastRisk, phase: lastPhase.label, color: lastPhase.color }
-}
-
 // ─── Realized P/L (aproximado por faixa etária) ───────────────────────────────
 
 interface OHLCVRow { time: number; close: number; volume: number }
@@ -1613,8 +1388,8 @@ export async function renderOilPrice(canvas: HTMLCanvasElement): Promise<{ price
         {
           label: 'Brent (US$/barril)',
           data: prices,
-          borderColor: '#e6b450',
-          backgroundColor: '#e6b45018',
+          borderColor: '#C95180',
+          backgroundColor: '#C9518018',
           fill: true,
           tension: 0.2,
           borderWidth: 1.8,
@@ -1677,9 +1452,9 @@ const FLOW_UPPER = 80
 const FLOW_LOWER = 20
 
 const FLOW_PHASES = [
-  { max: FLOW_LOWER, label: 'Descontado',    color: '#3fb950' },
-  { max: FLOW_UPPER,  label: 'Neutro',       color: '#e6edf3' },
-  { max: Infinity,    label: 'Sobrecomprado', color: '#f85149' },
+  { max: FLOW_LOWER, label: 'Descontado',    color: '#79EDB0' },
+  { max: FLOW_UPPER,  label: 'Neutro',       color: '#FEF4EB' },
+  { max: Infinity,    label: 'Sobrecomprado', color: '#FE6AA4' },
 ] as const
 
 function flowPhaseInfo(v: number): { label: string; color: string } {
@@ -1715,8 +1490,8 @@ const flowZonesPlugin = {
     if (!chartArea || !y) return
 
     const lines = [
-      { value: FLOW_UPPER, color: '#f85149' },
-      { value: FLOW_LOWER, color: '#3fb950' },
+      { value: FLOW_UPPER, color: '#FE6AA4' },
+      { value: FLOW_LOWER, color: '#79EDB0' },
     ]
 
     ctx.save()

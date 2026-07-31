@@ -44,6 +44,21 @@ export async function fetchCandles(
   }))
 }
 
+export interface OrderBookLevel { price: number; qty: number }
+export interface OrderBookSnapshot { bids: OrderBookLevel[]; asks: OrderBookLevel[] }
+
+/** Foto atual do livro de ofertas (bids/asks). A Binance não expõe histórico
+ * de order book de graça — isto é sempre o estado agora, não retroativo. */
+export async function fetchOrderBook(symbol: string, limit = 1000): Promise<OrderBookSnapshot> {
+  const res = await fetch(`${REST}/depth?symbol=${symbol}&limit=${limit}`)
+  if (!res.ok) throw new Error(`Binance depth ${symbol} HTTP ${res.status}`)
+  const d: { bids: [string, string][]; asks: [string, string][] } = await res.json()
+  return {
+    bids: d.bids.map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q) })),
+    asks: d.asks.map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q) })),
+  }
+}
+
 // ─── Preço ao vivo de MON (multi-exchange fallback) ───────────────────────────
 
 const get = (url: string) =>

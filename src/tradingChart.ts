@@ -36,10 +36,10 @@ function intervalFor(days: number) {
 
 const toSec = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp
 
-const upColor   = '#26a69a'
-const downColor = '#ef5350'
-const wickUp    = '#26a69a'
-const wickDown  = '#ef5350'
+const upColor   = '#79EDB0'
+const downColor = '#FE6AA4'
+const wickUp    = '#79EDB0'
+const wickDown  = '#FE6AA4'
 
 // ─── criação do chart ─────────────────────────────────────────────────────────
 
@@ -48,23 +48,23 @@ export function createTradingChart(container: HTMLElement): void {
 
   chart = createChart(container, {
     layout: {
-      background: { color: '#161b22' },
-      textColor:  '#8b949e',
+      background: { color: '#1D1922' },
+      textColor:  '#9CE8C0',
     },
     grid: {
-      vertLines: { color: '#21262d' },
-      horzLines: { color: '#21262d' },
+      vertLines: { color: '#2A2530' },
+      horzLines: { color: '#2A2530' },
     },
     crosshair: {
-      vertLine: { color: '#58a6ff60', width: 1, style: 2 },
-      horzLine: { color: '#58a6ff60', width: 1, style: 2 },
+      vertLine: { color: '#79EDB060', width: 1, style: 2 },
+      horzLine: { color: '#79EDB060', width: 1, style: 2 },
     },
     rightPriceScale: {
-      borderColor: '#30363d',
+      borderColor: '#000000',
       scaleMargins: { top: 0.1, bottom: 0.25 },
     },
     timeScale: {
-      borderColor:       '#30363d',
+      borderColor:       '#000000',
       timeVisible:       true,
       secondsVisible:    false,
       fixLeftEdge:       false,
@@ -89,7 +89,7 @@ export function createTradingChart(container: HTMLElement): void {
 
   // Volume (histograma no fundo, 20% da altura)
   volSeries = chart.addSeries(HistogramSeries, {
-    color:          '#58a6ff40',
+    color:          '#9CE8C040',
     priceFormat:    { type: 'volume' },
     priceScaleId:   'vol',
   } as Partial<HistogramSeriesOptions>)

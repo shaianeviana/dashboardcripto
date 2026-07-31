@@ -3,9 +3,10 @@ import { Chart } from 'chart.js'
 import type { PythPrice, TickerStats } from './types'
 import { streamPyth } from './pyth'
 import { connectTickerWS, startMonPolling } from './binance'
-import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom, renderBullBearTide, updateBullBearRange, renderNuplLth, renderMvrvRatio, renderRealizedPL, renderDrawdownRisk, renderOilPrice, renderTraderFlow } from './charts'
+import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom, renderBullBearTide, updateBullBearRange, renderNuplLth, renderMvrvRatio, renderRealizedPL, renderOilPrice, renderTraderFlow } from './charts'
 import { createTradingChart, loadTradingChart, tickTradingChart } from './tradingChart'
 import { renderLiquidationHeatmap } from './heatmap'
+import { renderOrderBookHeatmap } from './orderbook'
 import { isAuthenticated, logout } from './auth'
 import { mountLoginPage } from './login'
 
@@ -22,7 +23,7 @@ function startDashboard() {
 // ─── HTML ─────────────────────────────────────────────────────────────────────
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <h1>Sproutboard Crypto — ao vivo</h1>
+  <h1>Sproutboard</h1>
   <p class="chart-sub" style="margin-top:-8px;">Nos gráficos: passe o mouse para ver valores · scroll/pinça para zoom · arraste para navegar · duplo-clique para resetar</p>
 
   <div class="daily-summary" id="daily-summary">
@@ -87,7 +88,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <!-- Stats de mercado BTC (Binance WS) -->
-  <div class="section-label">Mercado BTC · <span style="color:#f0b90b">Binance WebSocket</span></div>
+  <div class="section-label">Mercado BTC · <span style="color:#FDC5CE">Binance WebSocket</span></div>
   <div class="stats">
     <div class="card">
       <div class="label">Variação 24h</div>
@@ -257,25 +258,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
   <div class="chart-wrap" id="rpl-wrap" style="height:460px"><canvas id="rpl-canvas"></canvas></div>
 
-  <h2>Drawdown Risk</h2>
-  <p class="chart-sub">Aproximação via MVRV Z-Score (suavizado, percentil histórico 0–100) · não é o indicador "Drawdown Risk V3" original · verde = risco baixo, vermelho = risco alto de correção</p>
-
-  <div class="nupl-card">
-    <div class="nupl-main-col">
-      <div class="nupl-phase" id="risk-phase">—</div>
-      <div class="nupl-sublabel">Fase atual</div>
-      <div class="nupl-value" id="risk-value" style="margin-top:10px;">—</div>
-      <div class="nupl-sublabel">Risco (0–100)</div>
-    </div>
-    <div class="nupl-legend">
-      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#3fb950"></span>Risco baixo (&lt; 60)</div>
-      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#e6b450"></span>Risco moderado (60 – 85)</div>
-      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#f85149"></span>Risco alto (&gt; 85)</div>
-    </div>
-  </div>
-
-  <div class="chart-wrap" id="risk-wrap"><canvas id="risk-canvas"></canvas></div>
-
   <h2>Preço do Petróleo (Brent)</h2>
   <p class="chart-sub">Cotação spot do Brent (referência global) · últimos 12 meses · dados Pyth Network</p>
 
@@ -292,9 +274,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="nupl-sublabel">Trader Flow (0–100)</div>
     </div>
     <div class="nupl-legend">
-      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#3fb950"></span>Descontado <span id="flow-pct-low"></span></div>
-      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#e6edf3"></span>Neutro <span id="flow-pct-mid"></span></div>
-      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#f85149"></span>Sobrecomprado <span id="flow-pct-high"></span></div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#79EDB0"></span>Descontado <span id="flow-pct-low"></span></div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#FEF4EB"></span>Neutro <span id="flow-pct-mid"></span></div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#FE6AA4"></span>Sobrecomprado <span id="flow-pct-high"></span></div>
     </div>
   </div>
 
@@ -308,6 +290,21 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <div class="chart-wrap" id="flow-wrap"><canvas id="flow-canvas"></canvas></div>
+
+  <h2>Order Book Heatmap</h2>
+  <p class="chart-sub">Paredes de compra (ciano) e venda (laranja) do livro de ofertas do BTC/USDT · projetadas sobre os candles recentes · <strong>foto do livro agora</strong> — a Binance não expõe histórico de order book, então isto atualiza ao vivo mas não reconstrói dias passados</p>
+
+  <div style="display:flex; flex-wrap:wrap; gap:8px 20px; margin-bottom:14px;">
+    <div class="nupl-legend-item"><span class="nupl-dot" style="background:#79EDB0"></span>Candle de alta</div>
+    <div class="nupl-legend-item"><span class="nupl-dot" style="background:#FE6AA4"></span>Candle de baixa</div>
+    <div class="nupl-legend-item"><span class="nupl-dot" style="background:#2DD4BF"></span>Parede de compra (bid) — quanto maior o traço, mais BTC parado esperando comprar naquele preço</div>
+  </div>
+  <div style="display:flex; flex-wrap:wrap; gap:8px 20px; margin-bottom:14px;">
+    <div class="nupl-legend-item"><span class="nupl-dot" style="background:#FB923C"></span>Parede de venda (ask) — quanto maior o traço, mais BTC parado esperando vender naquele preço</div>
+    <div class="nupl-legend-item"><span class="nupl-dot" style="background:#FEF4EB"></span>Preço atual do BTC</div>
+  </div>
+
+  <div class="chart-wrap" id="orderbook-wrap"><canvas id="orderbook-canvas"></canvas></div>
 
   <footer class="footer">
     Created by <a href="https://x.com/shaianeviana" target="_blank" rel="noopener">shaianeviana</a>
@@ -712,7 +709,7 @@ async function loadBullBearTide() {
     const { deviation, sma200, price } = await renderBullBearTide(canvas, 'all')
 
     const isBull = deviation >= 0
-    const col    = isBull ? '#3fb950' : '#f85149'
+    const col    = isBull ? '#79EDB0' : '#FE6AA4'
     const sign   = deviation >= 0 ? '+' : ''
 
     const phaseEl = $('bbt-phase') as HTMLElement
@@ -842,30 +839,6 @@ $('rpl-range-controls').addEventListener('click', e => {
 setTimeout(loadRealizedPL, 12000)
 setInterval(loadRealizedPL, 6 * 60 * 60 * 1000)
 
-// ─── Drawdown Risk ─────────────────────────────────────────────────────────────
-
-async function loadDrawdownRisk() {
-  const wrap = $('risk-wrap') as HTMLElement
-  wrap.innerHTML = '<canvas id="risk-canvas"></canvas>'
-  try {
-    const canvas = $('risk-canvas') as HTMLCanvasElement
-    const { risk, phase, color } = await renderDrawdownRisk(canvas)
-
-    const phaseEl = $('risk-phase') as HTMLElement
-    phaseEl.textContent = phase
-    phaseEl.style.color = color
-
-    const valueEl = $('risk-value') as HTMLElement
-    valueEl.textContent = risk.toFixed(1)
-    valueEl.style.color = color
-  } catch (e) {
-    chartError('risk-wrap', 'Erro Drawdown Risk: ' + (e as Error).message)
-  }
-}
-
-setTimeout(loadDrawdownRisk, 13500)
-setInterval(loadDrawdownRisk, 12 * 60 * 60 * 1000)
-
 // ─── Preço do Petróleo (Brent) ───────────────────────────────────────────────────
 
 async function loadOilPrice() {
@@ -920,6 +893,22 @@ $('flow-range-controls').addEventListener('click', e => {
 
 setTimeout(loadTraderFlow, 16500)
 setInterval(loadTraderFlow, 12 * 60 * 60 * 1000)
+
+// ─── Order Book Heatmap (foto ao vivo do livro de ofertas) ──────────────────────
+
+async function loadOrderBookHeatmap() {
+  const wrap = $('orderbook-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="orderbook-canvas"></canvas>'
+  try {
+    const canvas = $('orderbook-canvas') as HTMLCanvasElement
+    await renderOrderBookHeatmap(canvas)
+  } catch (e) {
+    chartError('orderbook-wrap', 'Erro Order Book Heatmap: ' + (e as Error).message)
+  }
+}
+
+setTimeout(loadOrderBookHeatmap, 18000)
+setInterval(loadOrderBookHeatmap, 30_000)
 
 // ─── Logout ────────────────────────────────────────────────────────────────────
 
