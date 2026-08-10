@@ -1,6 +1,7 @@
 import type { Candle, Kline, TickerStats } from './types'
 
 const REST = 'https://api.binance.com/api/v3'
+const FAPI = 'https://fapi.binance.com/fapi/v1'
 const WS   = 'wss://stream.binance.com:9443/ws'
 
 // ─── REST ─────────────────────────────────────────────────────────────────────
@@ -23,6 +24,17 @@ export async function fetchKlines(
   return raw.map(k => ({ time: k[0], close: parseFloat(k[4]) }))
 }
 
+function parseCandles(raw: [number, string, string, string, string, string][]): Candle[] {
+  return raw.map(k => ({
+    time:   k[0],
+    open:   parseFloat(k[1]),
+    high:   parseFloat(k[2]),
+    low:    parseFloat(k[3]),
+    close:  parseFloat(k[4]),
+    volume: parseFloat(k[5]),
+  }))
+}
+
 export async function fetchCandles(
   symbol: string,
   interval: string,
@@ -33,15 +45,21 @@ export async function fetchCandles(
   if (startTime) params.set('startTime', String(startTime))
   const res = await fetch(`${REST}/klines?${params}`)
   if (!res.ok) throw new Error(`Binance candles ${symbol} HTTP ${res.status}`)
-  const raw: [number, string, string, string, string, string][] = await res.json()
-  return raw.map(k => ({
-    time:   k[0],
-    open:   parseFloat(k[1]),
-    high:   parseFloat(k[2]),
-    low:    parseFloat(k[3]),
-    close:  parseFloat(k[4]),
-    volume: parseFloat(k[5]),
-  }))
+  return parseCandles(await res.json())
+}
+
+/** HYPE não está listada na Binance spot, só nos futuros perpétuos. */
+export async function fetchFuturesCandles(
+  symbol: string,
+  interval: string,
+  limit: number,
+  startTime?: number,
+): Promise<Candle[]> {
+  const params = new URLSearchParams({ symbol, interval, limit: String(limit) })
+  if (startTime) params.set('startTime', String(startTime))
+  const res = await fetch(`${FAPI}/klines?${params}`)
+  if (!res.ok) throw new Error(`Binance Futures candles ${symbol} HTTP ${res.status}`)
+  return parseCandles(await res.json())
 }
 
 export interface OrderBookLevel { price: number; qty: number }
@@ -109,6 +127,73 @@ export async function fetchMonPrice(): Promise<number> {
   } catch { /* segue */ }
 
   throw new Error('MON indisponível em todas as exchanges')
+}
+
+/** Candles diários (OHLCV) de MON — a Binance não lista MONUSDT, então tenta
+ * spot de outras corretoras em sequência até achar histórico. Só cobre 1D:
+ * a granularidade intraday varia demais entre essas exchanges menores. */
+export async function fetchMonCandles(limit = 400): Promise<{ candles: Candle[]; source: string }> {
+  // 1) Bybit (mais novo primeiro → reverse), linha: [start,open,high,low,close,volume,turnover]
+  try {
+    const d = await get(`https://api.bybit.com/v5/market/kline?category=spot&symbol=MONUSDT&interval=D&limit=${Math.min(limit, 1000)}`)
+    const rows: [string, string, string, string, string, string][] = d?.result?.list ?? []
+    if (rows.length > 0) {
+      const candles: Candle[] = rows.map(r => ({
+        time: Number(r[0]), open: parseFloat(r[1]), high: parseFloat(r[2]), low: parseFloat(r[3]), close: parseFloat(r[4]), volume: parseFloat(r[5]),
+      })).reverse()
+      return { candles, source: 'Bybit' }
+    }
+  } catch { /* segue */ }
+
+  // 2) OKX (mais novo primeiro → reverse), linha: [ts,o,h,l,c,vol,...]
+  try {
+    const d = await get(`https://www.okx.com/api/v5/market/history-candles?instId=MON-USDT&bar=1D&limit=${Math.min(limit, 300)}`)
+    const rows: string[][] = d?.data ?? []
+    if (rows.length > 0) {
+      const candles: Candle[] = rows.map(r => ({
+        time: Number(r[0]), open: parseFloat(r[1]), high: parseFloat(r[2]), low: parseFloat(r[3]), close: parseFloat(r[4]), volume: parseFloat(r[5]),
+      })).reverse()
+      return { candles, source: 'OKX' }
+    }
+  } catch { /* segue */ }
+
+  // 3) MEXC, linha: [ts,o,h,l,c,vol,...]
+  try {
+    const d: [number, string, string, string, string, string][] =
+      await get(`https://api.mexc.com/api/v3/klines?symbol=MONUSDT&interval=1d&limit=${Math.min(limit, 1000)}`)
+    if (d?.length > 0) {
+      const candles: Candle[] = d.map(r => ({
+        time: r[0], open: parseFloat(r[1]), high: parseFloat(r[2]), low: parseFloat(r[3]), close: parseFloat(r[4]), volume: parseFloat(r[5]),
+      }))
+      return { candles, source: 'MEXC' }
+    }
+  } catch { /* segue */ }
+
+  // 4) Gate.io, linha: [ts,vol,close,high,low,open] (tempo em segundos)
+  try {
+    const d: [string, string, string, string, string, string][] =
+      await get(`https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=MON_USDT&interval=1d&limit=${Math.min(limit, 1000)}`)
+    if (d?.length > 0) {
+      const candles: Candle[] = d.map(r => ({
+        time: Number(r[0]) * 1000, open: parseFloat(r[5]), high: parseFloat(r[3]), low: parseFloat(r[4]), close: parseFloat(r[2]), volume: parseFloat(r[1]),
+      }))
+      return { candles, source: 'Gate.io' }
+    }
+  } catch { /* segue */ }
+
+  // 5) KuCoin (mais novo primeiro → reverse), linha: [ts,open,close,high,low,volume,turnover] (tempo em segundos)
+  try {
+    const d = await get('https://api.kucoin.com/api/v1/market/candles?type=1day&symbol=MON-USDT')
+    const rows: string[][] = d?.data ?? []
+    if (rows.length > 0) {
+      const candles: Candle[] = rows.map(r => ({
+        time: Number(r[0]) * 1000, open: parseFloat(r[1]), close: parseFloat(r[2]), high: parseFloat(r[3]), low: parseFloat(r[4]), volume: parseFloat(r[5]),
+      })).reverse()
+      return { candles, source: 'KuCoin' }
+    }
+  } catch { /* segue */ }
+
+  throw new Error('MON: candles indisponíveis em todas as exchanges')
 }
 
 /** Polling contínuo do preço de MON */

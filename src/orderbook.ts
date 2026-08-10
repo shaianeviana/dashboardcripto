@@ -99,7 +99,7 @@ export async function renderOrderBookHeatmap(canvas: HTMLCanvasElement): Promise
     const c = candles[i]
     const x = toX(i)
     const up = c.close >= c.open
-    const color = up ? '#79EDB0' : '#FE6AA4'
+    const color = up ? '#79EDB0' : '#F6465D'
 
     ctx.strokeStyle = color
     ctx.lineWidth = 1

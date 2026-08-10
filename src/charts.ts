@@ -524,8 +524,22 @@ interface BbtCache {
 let bbtCache: BbtCache | null = null
 let bullBearTideChart: Chart | null = null
 
-/** Busca histórico completo do BTC — CryptoCompare (2014→hoje) com fallback Binance paginado */
+let btcHistoryCache:   { time: number; price: number }[]           | null = null
+let btcHistoryPromise: Promise<{ time: number; price: number }[]>  | null = null
+
+/** Busca histórico completo do BTC — CryptoCompare (2014→hoje) com fallback Binance paginado.
+ * Cacheia o resultado: BBT, NUPL (fallback) e a MA 200 semanas consomem a mesma série longa. */
 async function fetchBtcHistory(): Promise<{ time: number; price: number }[]> {
+  if (btcHistoryCache) return btcHistoryCache
+  if (!btcHistoryPromise) {
+    btcHistoryPromise = fetchBtcHistoryUncached().finally(() => { btcHistoryPromise = null })
+  }
+  const data = await btcHistoryPromise
+  if (data.length > 200) btcHistoryCache = data
+  return data
+}
+
+async function fetchBtcHistoryUncached(): Promise<{ time: number; price: number }[]> {
 
   // ── 1) CryptoCompare: gratuito, CORS liberado, dados desde 2010 ─────────
   try {
@@ -715,6 +729,126 @@ export async function renderBullBearTide(
     sma200:    v.sma200vals[last],
     price:     v.prices[last],
   }
+}
+
+// ─── MA 200 semanas ─────────────────────────────────────────────────────────
+
+export interface Ma200WeeklyResult {
+  price: number
+  ma200: number
+  dev:   number   // % de desvio do preço em relação à MA 200 semanas
+}
+
+let ma200WeeklyChart: Chart | null = null
+
+/** Reduz o histórico diário a um ponto por semana (fecho = último dia disponível da semana, seg→dom UTC). */
+function weeklyClosesFromDaily(raw: { time: number; price: number }[]): { time: number; close: number }[] {
+  const weeks = new Map<number, number>()
+  for (const d of raw) {
+    const dt  = new Date(d.time)
+    const dow = (dt.getUTCDay() + 6) % 7 // 0 = segunda
+    const weekStart = Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate() - dow)
+    weeks.set(weekStart, d.price) // dias posteriores da mesma semana sobrescrevem → fecho semanal
+  }
+  return [...weeks.entries()].map(([time, close]) => ({ time, close })).sort((a, b) => a.time - b.time)
+}
+
+export async function renderMa200Weekly(canvas: HTMLCanvasElement): Promise<Ma200WeeklyResult> {
+  const raw    = await fetchBtcHistory()
+  const weekly = weeklyClosesFromDaily(raw)
+  const period = 200
+
+  const labels: string[] = []
+  const prices: number[] = []
+  const ma:     number[] = []
+
+  let sum = 0
+  for (let i = 0; i < weekly.length; i++) {
+    sum += weekly[i].close
+    if (i >= period) sum -= weekly[i - period].close
+    if (i >= period - 1) {
+      labels.push(new Date(weekly[i].time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' }))
+      prices.push(weekly[i].close)
+      ma.push(sum / period)
+    }
+  }
+
+  if (ma.length < 2) throw new Error('Histórico insuficiente para calcular a MA 200 semanas')
+
+  const price   = prices[prices.length - 1]
+  const ma200   = ma[ma.length - 1]
+  const dev     = parseFloat((((price - ma200) / ma200) * 100).toFixed(2))
+  const isAbove = price >= ma200
+  const maColor = isAbove ? '#79EDB0' : '#FE6AA4'
+
+  ma200WeeklyChart = destroy(ma200WeeklyChart)
+  ma200WeeklyChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'BTC (semanal)',
+          data: prices,
+          borderColor: '#e6edf3cc',
+          borderWidth: 1.3,
+          fill: false,
+          tension: 0.1,
+          pointRadius: 0,
+          order: 2,
+        },
+        {
+          label: 'MA 200 semanas',
+          data: ma,
+          borderColor: maColor,
+          borderWidth: 2,
+          fill: false,
+          tension: 0.1,
+          pointRadius: 0,
+          order: 1,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index' as const, intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          labels: { color: '#8b949e', boxWidth: 12, usePointStyle: true, pointStyle: 'line' },
+        },
+        tooltip: {
+          backgroundColor: '#1c2128',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          padding: 10,
+          callbacks: {
+            label: ctx => `${ctx.dataset.label}: $${Number(ctx.parsed.y).toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
+          },
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
+      },
+      scales: {
+        x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
+        y: {
+          type: 'logarithmic' as const,
+          ticks: {
+            color: '#8b949e',
+            callback: v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }),
+          },
+          grid: { color: GRID },
+        },
+      },
+    },
+  })
+  enableZoomReset(ma200WeeklyChart)
+
+  return { price, ma200, dev }
 }
 
 // ─── NUPL (Net Unrealized Profit/Loss) ───────────────────────────────────────
@@ -1334,6 +1468,268 @@ export async function renderRealizedPL(
     },
   })
   enableZoomReset(rplChart)
+}
+
+// ─── Funding Rate (Futures, anualizado) ────────────────────────────────────────
+// Taxa de funding do perpétuo BTC/USDT — cobrada a cada 8h. Anualizamos
+// (× 3 eventos/dia × 365) para dar uma leitura tipo APR, mais legível que a
+// taxa bruta por período. Fonte: Binance Futures, pública, sem chave/CORS.
+
+export interface FundingRateResult {
+  aprNow: number
+  phase:  string
+  color:  string
+}
+
+interface FundingRow { time: number; rate: number }
+
+let fundingCache: FundingRow[] | null = null
+let fundingChart: Chart | null = null
+
+async function fetchFundingHistory(): Promise<FundingRow[]> {
+  const res = await fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1000', { signal: AbortSignal.timeout(12_000) })
+  if (!res.ok) throw new Error(`Binance funding HTTP ${res.status}`)
+  const raw: { fundingTime: number; fundingRate: string }[] = await res.json()
+  return raw.map(r => ({ time: r.fundingTime, rate: parseFloat(r.fundingRate) }))
+}
+
+function fundingSlice(rows: FundingRow[], days: number | 'all'): FundingRow[] {
+  if (days === 'all') return rows
+  const cutoff = Date.now() - days * 86_400_000
+  return rows.filter(r => r.time >= cutoff)
+}
+
+export async function renderFundingRate(canvas: HTMLCanvasElement, days: number | 'all' = 90): Promise<FundingRateResult> {
+  if (!fundingCache) fundingCache = await fetchFundingHistory()
+  const rows = fundingSlice(fundingCache, days)
+  if (rows.length < 3) throw new Error('Dados insuficientes')
+
+  const labels  = rows.map(r => dateFmt(r.time, false))
+  const aprVals = rows.map(r => parseFloat((r.rate * 3 * 365 * 100).toFixed(3)))
+  const lastApr = aprVals[aprVals.length - 1]
+  const isPos   = lastApr >= 0
+  const color   = isPos ? '#79EDB0' : '#f85149'
+
+  fundingChart = destroy(fundingChart)
+  fundingChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Funding APR',
+        data: aprVals,
+        backgroundColor: aprVals.map(v => v >= 0 ? '#79EDB088' : '#f8514988'),
+        borderWidth: 0,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1c2128',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          padding: 10,
+          callbacks: {
+            label: ctx => {
+              const v = ctx.parsed.y ?? 0
+              return `APR: ${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
+            },
+          },
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
+      },
+      scales: {
+        x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
+        y: {
+          ...YAXIS,
+          ticks: { ...YAXIS.ticks, callback: v => Number(v).toFixed(0) + '%' },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          grid: { color: (ctx: any) => ctx.tick.value === 0 ? '#ffffff44' : GRID },
+        },
+      },
+    },
+  })
+  enableZoomReset(fundingChart)
+
+  return {
+    aprNow: lastApr,
+    phase: isPos ? 'Longs pagam Shorts' : 'Shorts pagam Longs',
+    color,
+  }
+}
+
+// ─── Open Interest (BTC) ────────────────────────────────────────────────────────
+// Binance só retém ~30 dias neste endpoint (futures/data/openInterestHist),
+// então o gráfico mostra o histórico recente disponível, não um range escolhível.
+
+export interface OpenInterestResult {
+  btc: number
+  usd: number
+}
+
+interface OIRow { time: number; oi: number; usd: number }
+
+let oiChart: Chart | null = null
+
+async function fetchOpenInterestHistory(): Promise<OIRow[]> {
+  const res = await fetch('https://fapi.binance.com/futures/data/openInterestHist?symbol=BTCUSDT&period=4h&limit=500', { signal: AbortSignal.timeout(12_000) })
+  if (!res.ok) throw new Error(`Binance OI HTTP ${res.status}`)
+  const raw: { sumOpenInterest: string; sumOpenInterestValue: string; timestamp: number }[] = await res.json()
+  return raw.map(r => ({ time: r.timestamp, oi: parseFloat(r.sumOpenInterest), usd: parseFloat(r.sumOpenInterestValue) }))
+}
+
+export async function renderOpenInterest(canvas: HTMLCanvasElement): Promise<OpenInterestResult> {
+  const rows = await fetchOpenInterestHistory()
+  if (rows.length < 5) throw new Error('Dados insuficientes')
+
+  const labels  = rows.map(r => dateFmt(r.time, false))
+  const oiVals  = rows.map(r => r.oi)
+  const usdVals = rows.map(r => r.usd)
+  const up      = oiVals[oiVals.length - 1] >= oiVals[0]
+  const color   = up ? '#79EDB0' : '#f85149'
+
+  oiChart = destroy(oiChart)
+  oiChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Open Interest (BTC)',
+        data: oiVals,
+        borderColor: color,
+        backgroundColor: color + '18',
+        fill: true,
+        tension: 0.2,
+        borderWidth: 1.8,
+        pointRadius: 0,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1c2128',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          padding: 10,
+          callbacks: {
+            label: ctx => {
+              const i = ctx.dataIndex
+              return [
+                `OI: ${oiVals[i].toLocaleString('en-US', { maximumFractionDigits: 0 })} BTC`,
+                `≈ $${(usdVals[i] / 1e9).toFixed(2)}B`,
+              ]
+            },
+          },
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
+      },
+      scales: {
+        x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 8 } },
+        y: { ...YAXIS, ticks: { ...YAXIS.ticks, callback: v => Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) } },
+      },
+    },
+  })
+  enableZoomReset(oiChart)
+
+  return { btc: oiVals[oiVals.length - 1], usd: usdVals[usdVals.length - 1] }
+}
+
+// ─── Unemployment Rate (US, mensal) ──────────────────────────────────────────────
+// Fonte: BLS (Bureau of Labor Statistics) API pública v1 — sem chave, CORS liberado.
+// Sem registro a API limita a série às ~30 leituras mais recentes (~2,5 anos).
+
+export interface UnemploymentResult {
+  value: number
+  prev:  number
+  delta: number
+}
+
+interface BlsRow { year: string; periodName: string; value: string }
+
+let unrateChart: Chart | null = null
+
+async function fetchUnemploymentRows(): Promise<BlsRow[]> {
+  const res = await fetch('https://api.bls.gov/publicAPI/v1/timeseries/data/LNS14000000', { signal: AbortSignal.timeout(12_000) })
+  if (!res.ok) throw new Error(`BLS HTTP ${res.status}`)
+  const j: { Results?: { series?: { data?: BlsRow[] }[] } } = await res.json()
+  const rows = j.Results?.series?.[0]?.data ?? []
+  const valid = rows.filter(d => d.value !== '-' && !isNaN(parseFloat(d.value)))
+  if (valid.length < 10) throw new Error('Dados de desemprego insuficientes')
+  return valid
+}
+
+export async function renderUnemploymentRate(canvas: HTMLCanvasElement): Promise<UnemploymentResult> {
+  const rowsDesc = await fetchUnemploymentRows()   // API retorna mais recente primeiro
+  const rows     = [...rowsDesc].reverse()          // gráfico precisa cronológico
+
+  const labels = rows.map(r => `${r.periodName.slice(0, 3)}/${r.year.slice(2)}`)
+  const vals   = rows.map(r => parseFloat(r.value))
+  const last   = vals[vals.length - 1]
+  const prev   = vals[vals.length - 2]
+  const delta  = parseFloat((last - prev).toFixed(1))
+
+  unrateChart = destroy(unrateChart)
+  unrateChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Unemployment Rate',
+        data: vals,
+        borderColor: '#e6b450',
+        backgroundColor: '#e6b45018',
+        fill: true,
+        tension: 0.3,
+        borderWidth: 2,
+        pointRadius: 0,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1c2128',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          padding: 10,
+          callbacks: {
+            label: ctx => `Desemprego: ${(ctx.parsed.y ?? 0).toFixed(1)}%`,
+          },
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        zoom: ZOOM_OPTS as any,
+      },
+      scales: {
+        x: { ...XAXIS, ticks: { ...XAXIS.ticks, maxTicksLimit: 10 } },
+        y: { ...YAXIS, ticks: { ...YAXIS.ticks, callback: v => Number(v).toFixed(1) + '%' } },
+      },
+    },
+  })
+  enableZoomReset(unrateChart)
+
+  return { value: last, prev, delta }
 }
 
 /** Atualiza os últimos pontos de BTC/ETH/SOL com preços ao vivo */

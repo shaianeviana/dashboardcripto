@@ -3,8 +3,12 @@ import { Chart } from 'chart.js'
 import type { PythPrice, TickerStats } from './types'
 import { streamPyth } from './pyth'
 import { connectTickerWS, startMonPolling } from './binance'
-import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom, renderBullBearTide, updateBullBearRange, renderNuplLth, renderMvrvRatio, renderRealizedPL, renderOilPrice, renderTraderFlow } from './charts'
-import { createTradingChart, loadTradingChart, tickTradingChart } from './tradingChart'
+import { renderCyclesChart, tickCyclesChart, renderBtcMonChart, tickComparisonChart, resetComparisonZoom, renderBullBearTide, updateBullBearRange, renderMa200Weekly, renderNuplLth, renderMvrvRatio, renderRealizedPL, renderOilPrice, renderTraderFlow, renderFundingRate, renderOpenInterest, renderUnemploymentRate } from './charts'
+import {
+  createTradingChart, loadTradingChart, tickTradingChart,
+  setTradingAsset, TRADING_ASSETS,
+  type TradingAsset,
+} from './tradingChart'
 import { renderLiquidationHeatmap } from './heatmap'
 import { renderOrderBookHeatmap } from './orderbook'
 import { isAuthenticated, logout } from './auth'
@@ -23,6 +27,16 @@ function startDashboard() {
 // ─── HTML ─────────────────────────────────────────────────────────────────────
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
+  <button id="sidebar-toggle-btn" class="sidebar-toggle" type="button"><span class="star">★</span><span class="label">Favoritos</span></button>
+  <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-head">
+      <h3>Gráficos</h3>
+      <button id="sidebar-close-btn" class="sidebar-close" type="button">✕</button>
+    </div>
+    <div id="sidebar-body" class="sidebar-body"></div>
+  </aside>
+
   <h1>Sproutboard</h1>
   <p class="chart-sub" style="margin-top:-8px;">Nos gráficos: passe o mouse para ver valores · scroll/pinça para zoom · arraste para navegar · duplo-clique para resetar</p>
 
@@ -110,6 +124,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <!-- Gráfico de preço BTC -->
+  <section id="sec-price">
+  <div class="controls" id="asset-controls">
+    <button data-asset="BTC" class="active">BTC</button>
+    <button data-asset="SOL">SOL</button>
+    <button data-asset="PAXG">PAXG</button>
+    <button data-asset="HYPE">HYPE</button>
+    <button data-asset="MON">MON</button>
+  </div>
   <div class="controls" id="range-controls">
     <button data-days="1">15m · 24h</button>
     <button data-days="7" class="active">1h · 7d</button>
@@ -122,7 +144,35 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="refresh-track"><div class="refresh-fill" id="rf-price"></div></div>
   </div>
   <div class="chart-wrap" id="trading-chart"></div>
+  </section>
 
+  <section id="sec-ma200w">
+  <h2>BTC · Média Móvel 200 Semanas</h2>
+  <p class="chart-sub">Preço semanal do BTC vs. média móvel de 200 semanas · historicamente atuou como piso de longo prazo nos ciclos de baixa · escala de preço logarítmica</p>
+
+  <div class="bbt-card">
+    <div class="bbt-col">
+      <div class="bbt-phase" id="ma200w-phase">—</div>
+      <div class="bbt-sublabel">Fase atual</div>
+    </div>
+    <div class="bbt-col">
+      <div class="bbt-value" id="ma200w-dev">—</div>
+      <div class="bbt-sublabel">Desvio vs MA 200 sem</div>
+    </div>
+    <div class="bbt-col">
+      <div class="bbt-value" id="ma200w-ma">—</div>
+      <div class="bbt-sublabel">MA 200 semanas</div>
+    </div>
+    <div class="bbt-col">
+      <div class="bbt-value" id="ma200w-price">—</div>
+      <div class="bbt-sublabel">Preço atual BTC</div>
+    </div>
+  </div>
+
+  <div class="chart-wrap" id="ma200w-wrap"><canvas id="ma200w-canvas"></canvas></div>
+  </section>
+
+  <section id="sec-cycles">
   <h2>Ciclos sobrepostos</h2>
   <p class="chart-sub">Comparação alinhada a partir do topo de cada ciclo</p>
   <div class="refresh-header">
@@ -130,7 +180,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="refresh-track"><div class="refresh-fill" id="rf-cycles"></div></div>
   </div>
   <div class="chart-wrap" id="wrap-cycles"><canvas id="chart-cycles"></canvas></div>
+  </section>
 
+  <section id="sec-btcmon">
   <h2>BTC · ETH · SOL · MON (normalizado base 100)</h2>
   <p class="chart-sub">Comparação relativa desde o início da listagem do MON · scroll para zoom · arrastar para pan</p>
   <div class="refresh-header">
@@ -139,7 +191,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <button id="btn-reset-zoom" style="padding:3px 10px;font-size:11px;margin-left:8px;">Reset zoom</button>
   </div>
   <div class="chart-wrap" id="wrap-btcmon"><canvas id="chart-btcmon"></canvas></div>
+  </section>
 
+  <section id="sec-fng">
   <h2>Fear &amp; Greed Index</h2>
   <p class="chart-sub">Índice de Medo e Ganância — últimos 30 dias · alternative.me</p>
 
@@ -160,7 +214,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <div class="chart-wrap" id="fg-wrap"><canvas id="fg-canvas"></canvas></div>
+  </section>
 
+  <section id="sec-bbt">
   <h2>Bull/Bear Tide</h2>
   <p class="chart-sub">Desvio do preço BTC em relação à SMA 200 dias · verde = bull · vermelho = bear · dados desde 2014 · CoinGecko</p>
 
@@ -193,7 +249,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <div class="chart-wrap" id="bbt-wrap"><canvas id="bbt-canvas"></canvas></div>
+  </section>
 
+  <section id="sec-nupl">
   <h2>NUPL · Long-Term Holders</h2>
   <p class="chart-sub">Net Unrealized Profit/Loss — ciclos de mercado BTC · dados CoinMetrics · escala de preço logarítmica</p>
 
@@ -214,7 +272,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <div class="chart-wrap" id="nupl-wrap"><canvas id="nupl-canvas"></canvas></div>
+  </section>
 
+  <section id="sec-mvrv">
   <h2>MVRV Ratio</h2>
   <p class="chart-sub">Market Value to Realized Value — MVRV &lt; 1 = capitulação · &gt; 3.5 = overvalorizado · escala de preço logarítmica · dados CoinMetrics</p>
 
@@ -235,7 +295,54 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <div class="chart-wrap" id="mvrv-wrap"><canvas id="mvrv-canvas"></canvas></div>
+  </section>
 
+  <section id="sec-funding">
+  <h2>Funding Rate · APR (%)</h2>
+  <p class="chart-sub">Taxa de funding do perpétuo BTC/USDT anualizada · positiva = longs pagam shorts (mercado alavancado otimista) · negativa = shorts pagam longs · dados Binance Futures</p>
+
+  <div class="nupl-card">
+    <div class="nupl-main-col">
+      <div class="nupl-phase" id="funding-phase">—</div>
+      <div class="nupl-sublabel">Fase atual</div>
+      <div class="nupl-value" id="funding-value" style="margin-top:10px;">—</div>
+      <div class="nupl-sublabel">APR anualizado</div>
+    </div>
+    <div class="nupl-legend">
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#79EDB0"></span>Positivo — longs pagam shorts</div>
+      <div class="nupl-legend-item"><span class="nupl-dot" style="background:#f85149"></span>Negativo — shorts pagam longs</div>
+    </div>
+  </div>
+
+  <div class="controls" id="funding-range-controls">
+    <button data-funding="30">30d</button>
+    <button data-funding="90" class="active">90d</button>
+    <button data-funding="180">180d</button>
+    <button data-funding="all">All</button>
+  </div>
+
+  <div class="chart-wrap" id="funding-wrap"><canvas id="funding-canvas"></canvas></div>
+  </section>
+
+  <section id="sec-oi">
+  <h2>Open Interest (BTC)</h2>
+  <p class="chart-sub">Contratos em aberto no perpétuo BTC/USDT · últimos ~30 dias (limite de histórico da Binance) · dados Binance Futures</p>
+
+  <div class="stats" style="grid-template-columns:repeat(2,1fr); margin-bottom:14px;">
+    <div class="card">
+      <div class="label">Open Interest</div>
+      <div class="val" id="oi-btc">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Valor em USD</div>
+      <div class="val" id="oi-usd">—</div>
+    </div>
+  </div>
+
+  <div class="chart-wrap" id="oi-wrap"><canvas id="oi-canvas"></canvas></div>
+  </section>
+
+  <section id="sec-liq">
   <h2>Liquidation Heatmap</h2>
   <p class="chart-sub">Concentração de posições por nível de preço · azul escuro = baixa densidade · ciano/verde = alta · dados Binance 4h</p>
 
@@ -246,7 +353,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <div class="chart-wrap heatmap-wrap" id="liq-wrap"><canvas id="liq-canvas"></canvas></div>
+  </section>
 
+  <section id="sec-rpl">
   <h2>Realized P/L por Faixa Etária</h2>
   <p class="chart-sub">Lucro/prejuízo realizado estimado por tempo de posse · barras acima = lucro · abaixo = perda · dados CryptoCompare (aproximação via SMA)</p>
 
@@ -257,12 +366,34 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <div class="chart-wrap" id="rpl-wrap" style="height:460px"><canvas id="rpl-canvas"></canvas></div>
+  </section>
 
+  <section id="sec-unrate">
+  <h2>Unemployment Rate (%)</h2>
+  <p class="chart-sub">Taxa de desemprego dos EUA · dessazonalizada, mensal · dados BLS (Bureau of Labor Statistics)</p>
+
+  <div class="stats" style="grid-template-columns:repeat(2,1fr); margin-bottom:14px;">
+    <div class="card">
+      <div class="label">Taxa atual</div>
+      <div class="val" id="unrate-value">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Variação vs mês anterior</div>
+      <div class="val" id="unrate-delta">—</div>
+    </div>
+  </div>
+
+  <div class="chart-wrap" id="unrate-wrap"><canvas id="unrate-canvas"></canvas></div>
+  </section>
+
+  <section id="sec-oil">
   <h2>Preço do Petróleo (Brent)</h2>
   <p class="chart-sub">Cotação spot do Brent (referência global) · últimos 12 meses · dados Pyth Network</p>
 
   <div class="chart-wrap" id="oil-wrap"><canvas id="oil-canvas"></canvas></div>
+  </section>
 
+  <section id="sec-flow">
   <h2>Trader Flow</h2>
   <p class="chart-sub">Money Flow Index (14) sobre candles diários do BTC · aproximação do indicador "Trader Flow" · verde = zona de desconto, vermelho = zona de sobrecompra</p>
 
@@ -290,13 +421,15 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <div class="chart-wrap" id="flow-wrap"><canvas id="flow-canvas"></canvas></div>
+  </section>
 
+  <section id="sec-orderbook">
   <h2>Order Book Heatmap</h2>
   <p class="chart-sub">Paredes de compra (ciano) e venda (laranja) do livro de ofertas do BTC/USDT · projetadas sobre os candles recentes · <strong>foto do livro agora</strong> — a Binance não expõe histórico de order book, então isto atualiza ao vivo mas não reconstrói dias passados</p>
 
   <div style="display:flex; flex-wrap:wrap; gap:8px 20px; margin-bottom:14px;">
     <div class="nupl-legend-item"><span class="nupl-dot" style="background:#79EDB0"></span>Candle de alta</div>
-    <div class="nupl-legend-item"><span class="nupl-dot" style="background:#FE6AA4"></span>Candle de baixa</div>
+    <div class="nupl-legend-item"><span class="nupl-dot" style="background:#F6465D"></span>Candle de baixa</div>
     <div class="nupl-legend-item"><span class="nupl-dot" style="background:#2DD4BF"></span>Parede de compra (bid) — quanto maior o traço, mais BTC parado esperando comprar naquele preço</div>
   </div>
   <div style="display:flex; flex-wrap:wrap; gap:8px 20px; margin-bottom:14px;">
@@ -305,6 +438,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <div class="chart-wrap" id="orderbook-wrap"><canvas id="orderbook-canvas"></canvas></div>
+  </section>
 
   <footer class="footer">
     Created by <a href="https://x.com/shaianeviana" target="_blank" rel="noopener">shaianeviana</a>
@@ -407,11 +541,12 @@ streamPyth(
     if (prices.ETH) updateOracleCard('eth', prices.ETH, 2)
     if (prices.SOL) updateOracleCard('sol', prices.SOL, 3)
 
-    // ── tick ao vivo nos 3 gráficos ──
+    // ── tick ao vivo nos gráficos ──
     if (prices.BTC) {
-      tickTradingChart(prices.BTC.price)
+      tickTradingChart('BTC', prices.BTC.price)
       tickCyclesChart(prices.BTC.price)
     }
+    if (prices.SOL) tickTradingChart('SOL', prices.SOL.price)
     tickComparisonChart({
       BTC: prices.BTC?.price,
       ETH: prices.ETH?.price,
@@ -488,6 +623,25 @@ $('range-controls').addEventListener('click', (e) => {
   document.querySelectorAll('#range-controls button').forEach(b => b.classList.remove('active'))
   btn.classList.add('active')
   loadTradingChart(currentDays).then(() => barPrice.reset()).catch(console.error)
+})
+
+$('asset-controls').addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest('button') as HTMLButtonElement | null
+  if (!btn) return
+  const asset = btn.dataset.asset as TradingAsset | undefined
+  if (!asset || !(asset in TRADING_ASSETS)) return
+
+  document.querySelectorAll('#asset-controls button').forEach(b => b.classList.remove('active'))
+  btn.classList.add('active')
+  btn.disabled = true
+
+  setTradingAsset(asset)
+    .then(() => barPrice.reset())
+    .catch(err => {
+      console.error(err)
+      chartError('trading-chart', `Falha ao carregar ${TRADING_ASSETS[asset].label}: ${err instanceof Error ? err.message : err}`)
+    })
+    .finally(() => { btn.disabled = false })
 })
 
 document.getElementById('btn-reset-zoom')!.addEventListener('click', resetComparisonZoom)
@@ -738,6 +892,35 @@ $('bbt-range-controls').addEventListener('click', e => {
 setTimeout(loadBullBearTide, 5500)
 setInterval(loadBullBearTide, 12 * 60 * 60 * 1000)
 
+// ─── MA 200 semanas ─────────────────────────────────────────────────────────
+
+async function loadMa200Weekly() {
+  const wrap = $('ma200w-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="ma200w-canvas"></canvas>'
+  try {
+    const canvas = $('ma200w-canvas') as HTMLCanvasElement
+    const { price, ma200, dev } = await renderMa200Weekly(canvas)
+
+    const isAbove = price >= ma200
+    const col     = isAbove ? '#79EDB0' : '#FE6AA4'
+    const sign    = dev >= 0 ? '+' : ''
+
+    const phaseEl = $('ma200w-phase') as HTMLElement
+    phaseEl.textContent = isAbove ? 'ACIMA DA MA 200S' : 'ABAIXO DA MA 200S'
+    phaseEl.style.color = col
+
+    ;($('ma200w-dev')   as HTMLElement).textContent = `${sign}${dev.toFixed(2)}%`
+    ;($('ma200w-dev')   as HTMLElement).style.color = col
+    ;($('ma200w-ma')    as HTMLElement).textContent = '$' + ma200.toLocaleString('en-US', { maximumFractionDigits: 0 })
+    ;($('ma200w-price') as HTMLElement).textContent = '$' + price.toLocaleString('en-US',  { maximumFractionDigits: 0 })
+  } catch (e) {
+    chartError('ma200w-wrap', 'Erro MA 200 semanas: ' + (e as Error).message)
+  }
+}
+
+setTimeout(loadMa200Weekly, 6200)
+setInterval(loadMa200Weekly, 12 * 60 * 60 * 1000)
+
 // ─── NUPL-LTH ─────────────────────────────────────────────────────────────────
 
 async function loadNuplLth() {
@@ -785,6 +968,60 @@ async function loadMvrvRatio() {
 
 setTimeout(loadMvrvRatio, 7200)
 setInterval(loadMvrvRatio, 12 * 60 * 60 * 1000)
+
+// ─── Funding Rate ────────────────────────────────────────────────────────────
+
+let fundingRange: number | 'all' = 90
+
+async function loadFundingRate() {
+  const wrap = $('funding-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="funding-canvas"></canvas>'
+  try {
+    const canvas = $('funding-canvas') as HTMLCanvasElement
+    const { aprNow, phase, color } = await renderFundingRate(canvas, fundingRange)
+
+    const phaseEl = $('funding-phase') as HTMLElement
+    phaseEl.textContent = phase
+    phaseEl.style.color = color
+
+    const valueEl = $('funding-value') as HTMLElement
+    valueEl.textContent = `${aprNow >= 0 ? '+' : ''}${aprNow.toFixed(2)}%`
+    valueEl.style.color = color
+  } catch (e) {
+    chartError('funding-wrap', 'Erro Funding Rate: ' + (e as Error).message)
+  }
+}
+
+$('funding-range-controls').addEventListener('click', e => {
+  const btn = (e.target as HTMLElement).closest('button[data-funding]') as HTMLButtonElement | null
+  if (!btn) return
+  document.querySelectorAll('#funding-range-controls button').forEach(b => b.classList.remove('active'))
+  btn.classList.add('active')
+  const raw = btn.dataset.funding!
+  fundingRange = raw === 'all' ? 'all' : parseInt(raw, 10)
+  loadFundingRate()
+})
+
+setTimeout(loadFundingRate, 8500)
+setInterval(loadFundingRate, 15 * 60 * 1000)
+
+// ─── Open Interest ───────────────────────────────────────────────────────────
+
+async function loadOpenInterest() {
+  const wrap = $('oi-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="oi-canvas"></canvas>'
+  try {
+    const canvas = $('oi-canvas') as HTMLCanvasElement
+    const { btc, usd } = await renderOpenInterest(canvas)
+    ;($('oi-btc') as HTMLElement).textContent = btc.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' BTC'
+    ;($('oi-usd') as HTMLElement).textContent = '$' + (usd / 1e9).toFixed(2) + 'B'
+  } catch (e) {
+    chartError('oi-wrap', 'Erro Open Interest: ' + (e as Error).message)
+  }
+}
+
+setTimeout(loadOpenInterest, 9500)
+setInterval(loadOpenInterest, 5 * 60 * 1000)
 
 // ─── Liquidation Heatmap ───────────────────────────────────────────────────────
 
@@ -838,6 +1075,28 @@ $('rpl-range-controls').addEventListener('click', e => {
 
 setTimeout(loadRealizedPL, 12000)
 setInterval(loadRealizedPL, 6 * 60 * 60 * 1000)
+
+// ─── Unemployment Rate ─────────────────────────────────────────────────────────
+
+async function loadUnemploymentRate() {
+  const wrap = $('unrate-wrap') as HTMLElement
+  wrap.innerHTML = '<canvas id="unrate-canvas"></canvas>'
+  try {
+    const canvas = $('unrate-canvas') as HTMLCanvasElement
+    const { value, delta } = await renderUnemploymentRate(canvas)
+
+    ;($('unrate-value') as HTMLElement).textContent = value.toFixed(1) + '%'
+
+    const deltaEl = $('unrate-delta') as HTMLElement
+    deltaEl.textContent = `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} p.p.`
+    deltaEl.className = 'val ' + (delta > 0 ? 'down' : delta < 0 ? 'up' : '')
+  } catch (e) {
+    chartError('unrate-wrap', 'Erro Unemployment Rate: ' + (e as Error).message)
+  }
+}
+
+setTimeout(loadUnemploymentRate, 13500)
+setInterval(loadUnemploymentRate, 12 * 60 * 60 * 1000)
 
 // ─── Preço do Petróleo (Brent) ───────────────────────────────────────────────────
 
@@ -909,6 +1168,123 @@ async function loadOrderBookHeatmap() {
 
 setTimeout(loadOrderBookHeatmap, 18000)
 setInterval(loadOrderBookHeatmap, 30_000)
+
+// ─── Sidebar de favoritos ───────────────────────────────────────────────────────
+
+interface ChartSection { id: string; label: string }
+
+const CHART_SECTIONS: ChartSection[] = [
+  { id: 'sec-price',     label: 'Preço BTC (candles)' },
+  { id: 'sec-ma200w',    label: 'MA 200 Semanas' },
+  { id: 'sec-cycles',    label: 'Ciclos sobrepostos' },
+  { id: 'sec-btcmon',    label: 'BTC · ETH · SOL · MON' },
+  { id: 'sec-fng',       label: 'Fear & Greed Index' },
+  { id: 'sec-bbt',       label: 'Bull/Bear Tide' },
+  { id: 'sec-nupl',      label: 'NUPL · LTH' },
+  { id: 'sec-mvrv',      label: 'MVRV Ratio' },
+  { id: 'sec-funding',   label: 'Funding Rate · APR (%)' },
+  { id: 'sec-oi',        label: 'Open Interest (BTC)' },
+  { id: 'sec-liq',       label: 'Liquidation Heatmap' },
+  { id: 'sec-rpl',       label: 'Realized P/L por Faixa Etária' },
+  { id: 'sec-unrate',    label: 'Unemployment Rate (%)' },
+  { id: 'sec-oil',       label: 'Preço do Petróleo (Brent)' },
+  { id: 'sec-flow',      label: 'Trader Flow' },
+  { id: 'sec-orderbook', label: 'Order Book Heatmap' },
+]
+
+const FAV_KEY = 'sproutboard-favorites'
+
+function loadFavorites(): Set<string> {
+  try {
+    const raw = localStorage.getItem(FAV_KEY)
+    return new Set(raw ? (JSON.parse(raw) as string[]) : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function saveFavorites(favs: Set<string>): void {
+  localStorage.setItem(FAV_KEY, JSON.stringify([...favs]))
+}
+
+function initSidebar(): void {
+  const favs      = loadFavorites()
+  const toggleBtn = $('sidebar-toggle-btn')
+  const closeBtn  = $('sidebar-close-btn')
+  const backdrop  = $('sidebar-backdrop')
+  const sidebar   = $('sidebar')
+  const body      = $('sidebar-body')
+
+  const openSidebar  = () => { sidebar.classList.add('open'); backdrop.classList.add('open') }
+  const closeSidebar = () => { sidebar.classList.remove('open'); backdrop.classList.remove('open') }
+
+  toggleBtn.addEventListener('click', openSidebar)
+  closeBtn.addEventListener('click', closeSidebar)
+  backdrop.addEventListener('click', closeSidebar)
+
+  function renderItem(sec: ChartSection): HTMLElement {
+    const row = document.createElement('div')
+    row.className = 'sidebar-item'
+
+    const label = document.createElement('span')
+    label.textContent = sec.label
+    label.addEventListener('click', () => {
+      closeSidebar()
+      document.getElementById(sec.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+
+    const isFav = favs.has(sec.id)
+    const star  = document.createElement('button')
+    star.type      = 'button'
+    star.className = 'sidebar-star' + (isFav ? ' active' : '')
+    star.textContent = isFav ? '★' : '☆'
+    star.title = isFav ? 'Remover dos favoritos' : 'Adicionar aos favoritos'
+    star.addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (favs.has(sec.id)) favs.delete(sec.id)
+      else favs.add(sec.id)
+      saveFavorites(favs)
+      renderList()
+    })
+
+    row.append(label, star)
+    return row
+  }
+
+  function renderList(): void {
+    body.innerHTML = ''
+
+    const favLabel = document.createElement('div')
+    favLabel.className = 'sidebar-group-label'
+    favLabel.textContent = '★ Favoritos'
+    body.appendChild(favLabel)
+
+    const favSections = CHART_SECTIONS.filter(s => favs.has(s.id))
+    if (!favSections.length) {
+      const empty = document.createElement('div')
+      empty.className = 'sidebar-empty'
+      empty.textContent = 'Clique na estrela ao lado de um gráfico para favoritá-lo.'
+      body.appendChild(empty)
+    } else {
+      favSections.forEach(s => body.appendChild(renderItem(s)))
+    }
+
+    const divider = document.createElement('div')
+    divider.className = 'sidebar-divider'
+    body.appendChild(divider)
+
+    const allLabel = document.createElement('div')
+    allLabel.className = 'sidebar-group-label'
+    allLabel.textContent = 'Todos os gráficos'
+    body.appendChild(allLabel)
+
+    CHART_SECTIONS.forEach(s => body.appendChild(renderItem(s)))
+  }
+
+  renderList()
+}
+
+initSidebar()
 
 // ─── Logout ────────────────────────────────────────────────────────────────────
 
