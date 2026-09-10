@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-09T16:12:27.787Z",
-  "sentiment": "neutro",
-  "summary": "Bitcoin e Ethereum recuam levemente (-0,15% e -0,11%) enquanto Solana sofre queda mais acentuada (-0,93%), refletindo cautela no mercado apesar do índice Fear & Greed em \"Greed\" (66-69). O movimento parece impulsionado por notícias regulatórias mistas: enquanto o Fed segue com ações de compliance, a Alemanha propõe tributação de 25% em cripto a partir de 2028 e grupos comerciais nos EUA buscam bloquear novas taxações, criando incerteza sobre o ambiente regulatório global. As iniciativas positivas de inovação (fundo de crédito privado da Tether com $400M e push de $300M do governo americano em hardware quântico) não conseguem compensar preocupações fiscais de médio prazo."
+  "generatedAt": "2026-09-10T16:04:13.396Z",
+  "sentiment": "negativo",
+  "summary": "Bitcoin e Ethereum recuaram entre 1,8% e 2% nas últimas 24h, puxados pela inflação americana (PPI acima do esperado) que elevou yields dos Treasuries a máximas de 19 anos, aumentando o custo de oportunidade do ativo sem rendimento. Solana caiu mais (-3,3%), provavelmente por realização de lucros após recordar 263K tokens emitidos em um dia, sugerindo excesso de especulação. O índice de Medo e Ganância permanece em 69-66 (ainda em \"Greed\"), e as manchetes mostram que o setor segue em expansão institucional (Coinbase com bancos comunitários, MoneyGram com cartão stablecoin), mas reguladores ainda freiam projetos como tokenização de depósitos no UK, criando pressão de curto prazo."
 }
